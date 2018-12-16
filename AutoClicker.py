@@ -12,3 +12,4 @@ def restartGame():
 while True:
     restartGame()
     time.sleep(0)
+# warning there is current way to stop the script once you run apart from shutting down your pc
