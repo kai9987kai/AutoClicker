@@ -45,6 +45,5 @@ class YourGUI(tk.Tk):
         while running:
             pyautogui.click(replayBtn = (x,y)
 
-if __name__ == '__main__':
-    your_gui = YourGUI()
+your_gui = YourGUI()
 your_gui.mainloop()
