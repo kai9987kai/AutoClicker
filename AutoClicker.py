@@ -16,13 +16,13 @@ class YourGUI(tk.Tk):
         # inherit tkinter's window methods
         tk.Tk.__init__(self)
 
-        tk.Label(self, text="ENTER X:").grid(row=0, column=0)
+        tk.Label(self, text="ENTER X:").grid(row=0, column=3)
         self.inputX = tk.Entry(self)
         self.inputX.grid(row=0, column=1)
 
         tk.Label(self, text="ENTER Y:").grid(row=0, column=0)
         self.inputY = tk.Entry(self)
-        self.inputY.grid(row=0, column=2)
+        self.inputY.grid(row=0, column=4)
 
         tk.Button(self, text="convert", command=self.do_conversion).grid(row=3, column=0, columnspan=2)
 
