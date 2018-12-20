@@ -43,7 +43,7 @@ class YourGUI(tk.Tk):
             print("Invalid point")
             strtoint("crashmE!")
         while running:
-            pyautogui.click(replayBtn = (x,y)
+            pyautogui.click(replayBtn = (x,y))
 
 your_gui = YourGUI()
 your_gui.mainloop()
