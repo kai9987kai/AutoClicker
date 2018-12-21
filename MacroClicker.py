@@ -3,30 +3,24 @@ import pyautogui
 import time
 import tkinter as tk
 from numpy import *
-from tkinter import *
-
 
 class Coordinates():
-#Coordinates can be changed to wherever you want to AutoClick
     replayBtn = (100,350)
-
-
-# close button (woah)
 class YourGUI(tk.Tk):
     def __init__(self):
         # inherit tkinter's window methods
         tk.Tk.__init__(self)
-
+#Enter X field and label ⬇
         tk.Label(self, text="ENTER X:").grid(row=0, column=3)
         self.inputX = tk.Entry(self)
         self.inputX.grid(row=0, column=1)
-
+#Enter Y field and label ⬇
         tk.Label(self, text="ENTER Y:").grid(row=0, column=0)
         self.inputY = tk.Entry(self)
         self.inputY.grid(row=0, column=4)
-
+        # Start Button ⬇
         tk.Button(self, text="start", command=self.do_conversion).grid(row=3, column=0, columnspan=2)
-
+        # close button ⬇
         tk.Button(self, text="exit!", command=self.EXITME).grid(row=4, column=0, columnspan=2)
 
     def EXITME(self):
