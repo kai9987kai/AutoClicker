@@ -1,8 +1,6 @@
-#from PIL import ImageGrab, ImageOps
 import pyautogui
 import time
 import tkinter as tk
-from numpy import *
 
 class Coordinates():
     replayBtn = (100,350)
@@ -46,3 +44,4 @@ if __name__ == '__main__':
     your_gui = YourGUI()
     your_gui.title('Macro Clicker') # Set title
     your_gui.mainloop()
+time.sleep(0)
