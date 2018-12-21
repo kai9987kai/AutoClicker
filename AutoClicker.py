@@ -3,6 +3,7 @@ import pyautogui
 import time
 import tkinter as tk
 from numpy import *
+from tkinter import *
 
 
 class Coordinates():
@@ -47,6 +48,7 @@ class YourGUI(tk.Tk):
         while running:
             pyautogui.click(x, y)
 
-
-your_gui = YourGUI()
-your_gui.mainloop()
+if __name__ == '__main__':
+    your_gui = YourGUI()
+    your_gui.title('Macro Clicker') # Set title
+    your_gui.mainloop()
