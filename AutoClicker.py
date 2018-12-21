@@ -25,7 +25,7 @@ class YourGUI(tk.Tk):
         self.inputY = tk.Entry(self)
         self.inputY.grid(row=0, column=4)
 
-        tk.Button(self, text="convert", command=self.do_conversion).grid(row=3, column=0, columnspan=2)
+        tk.Button(self, text="start", command=self.do_conversion).grid(row=3, column=0, columnspan=2)
 
         tk.Button(self, text="exit!", command=self.EXITME).grid(row=4, column=0, columnspan=2)
 
