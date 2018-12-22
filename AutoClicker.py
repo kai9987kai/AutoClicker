@@ -1,6 +1,9 @@
 import pyautogui
 import time
 import tkinter as tk
+import webbrowser
+from tkinter import *
+
 
 class Coordinates():
     replayBtn = (100,350)
@@ -20,6 +23,9 @@ class YourGUI(tk.Tk):
         tk.Button(self, text="start", command=self.do_conversion).grid(row=3, column=0, columnspan=2)
         # close button ⬇
         tk.Button(self, text="exit!", command=self.EXITME).grid(row=4, column=0, columnspan=2)
+        def callback():
+            webbrowser.open_new(r"https://kai9987kai.github.io/AutoClicker.html")
+        tk.Button(self, text="ABOUT", command=callback).grid(row=4, column=2, columnspan=2)
 
     def EXITME(self):
         exit(0)  # crashed prog so it closes
@@ -39,11 +45,11 @@ class YourGUI(tk.Tk):
             # strtoint("crashmE!")
         while running:
             pyautogui.click(x, y)
-
+            
 if __name__ == '__main__':
     your_gui = YourGUI()
-    your_gui.title('AutoClicker') # Set title
-    your_gui.iconbitmap('favicon.ico')
+    your_gui.title('Macro Clicker') # Set title
+    your_gui.iconbitmap('favicon.ico') # Set icon
     your_gui.resizable(False, False)
     your_gui.mainloop()
 time.sleep(0)
