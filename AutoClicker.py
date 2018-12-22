@@ -48,7 +48,7 @@ class YourGUI(tk.Tk):
             
 if __name__ == '__main__':
     your_gui = YourGUI()
-    your_gui.title('Macro Clicker') # Set title
+    your_gui.title('AutoClicker') # Set title
     your_gui.iconbitmap('favicon.ico') # Set icon
     your_gui.resizable(False, False)
     your_gui.mainloop()
