@@ -20,7 +20,7 @@ class YourGUI(tk.Tk):
         self.inputY = tk.Entry(self)
         self.inputY.grid(row=0, column=4)
         # Start Button ⬇
-        tk.Button(self, text="start", command=self.do_conversion).grid(row=3, column=0, columnspan=2)
+        tk.Button(self, text="start", fg='green', command=self.do_conversion).grid(row=3, column=0, columnspan=2)
         # close button ⬇
         tk.Button(self, text="exit!", fg='red', command=self.EXITME).grid(row=4, column=0, columnspan=2)
         def callback():
