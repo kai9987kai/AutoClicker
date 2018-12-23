@@ -4,6 +4,8 @@ import tkinter as tk
 import webbrowser
 from tkinter import *
 from tkinter import messagebox
+import keyboard
+
 
 class Coordinates():
     replayBtn = (100,350)
@@ -12,13 +14,13 @@ class YourGUI(tk.Tk):
         # inherit tkinter's window methods
         tk.Tk.__init__(self)
 #Enter X field and label ⬇
-        tk.Label(self, text="ENTER X:", background="#ebdbff").grid(row=0, column=3)
+        tk.Label(self, text="ENTER Y:", background="#ebdbff").grid(row=0, column=2)
         self.inputX = tk.Entry(self)
         self.inputX.grid(row=0, column=1)
 #Enter Y field and label ⬇
-        tk.Label(self, text="ENTER Y:", background="#ebdbff").grid(row=0, column=0)
+        tk.Label(self, text="ENTER X:", background="#ebdbff").grid(row=0, column=0)
         self.inputY = tk.Entry(self)
-        self.inputY.grid(row=0, column=4)
+        self.inputY.grid(row=0, column=3)
         # Start Button ⬇
         tk.Button(self, text="start", fg='green', command=self.do_conversion).grid(row=3, column=0, columnspan=2)
         # close button ⬇
@@ -46,6 +48,7 @@ class YourGUI(tk.Tk):
         new_item2.add_command(label='Tutorial', command=callback3)
         menu.add_cascade(label='Help', menu=new_item2)
         self.config(menu=menu)
+        tk.Label(self, text="Keyboard key to\n Stop Clicking is the s key", background="#ebdbff").grid(row=3, column=3)
 
 
     def EXITME(self):
@@ -66,6 +69,11 @@ class YourGUI(tk.Tk):
             # strtoint("crashmE!")
         while running:
             pyautogui.click(x, y)
+            if keyboard.is_pressed('s'):
+                break
+
+
+
 
 if __name__ == '__main__':
     your_gui = YourGUI()
