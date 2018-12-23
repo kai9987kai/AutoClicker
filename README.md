@@ -1,6 +1,6 @@
 # AutoClicker
 Welcome to the AutoClicker Github Page!
-It spams clicks on the selected Coordinates. Python Modules needed: pyautogui
+It spams clicks on the selected Coordinates. Python Modules needed: pyautogui and keyboard
 #
 Project links:
  
