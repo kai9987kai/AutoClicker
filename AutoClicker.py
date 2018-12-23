@@ -22,7 +22,7 @@ class YourGUI(tk.Tk):
         # Start Button ⬇
         tk.Button(self, text="start", command=self.do_conversion).grid(row=3, column=0, columnspan=2)
         # close button ⬇
-        tk.Button(self, text="exit!", command=self.EXITME).grid(row=4, column=0, columnspan=2)
+        tk.Button(self, text="exit!", fg='red', command=self.EXITME).grid(row=4, column=0, columnspan=2)
         def callback():
             webbrowser.open_new(r"https://kai9987kai.github.io/AutoClicker.html")
         def callback2():
@@ -32,6 +32,7 @@ class YourGUI(tk.Tk):
         tk.Button(self, text="ABOUT", command=callback).grid(row=4, column=2, columnspan=2)
         def clicked():
             messagebox.showinfo('CONTACT', 'Email: kai9987kai@gmail.com')
+        #Menu Bar!! ⬇
         menu = Menu(self)
         new_item = Menu(menu)
         new_item.add_command(label='ABOUT', command=callback)
@@ -45,6 +46,7 @@ class YourGUI(tk.Tk):
         new_item2.add_command(label='Tutorial', command=callback3)
         menu.add_cascade(label='Help', menu=new_item2)
         self.config(menu=menu)
+
 
     def EXITME(self):
         exit(0)  # crashed prog so it closes
