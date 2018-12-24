@@ -24,7 +24,7 @@ class YourGUI(tk.Tk):
         # Start Button ⬇
         tk.Button(self, text="start", fg='green', command=self.do_conversion).grid(row=3, column=0, columnspan=2)
         # close button ⬇
-        tk.Button(self, text="exit!", fg='red', command=self.EXITME).grid(row=4, column=0)
+        tk.Button(self, text="exit!", fg='red', command=self.EXITME).grid(row=4, column=0, columnspan=2)
 
         self.inputhotkey = tk.Entry(self)
         self.inputhotkey.grid(row=1, column=3, columnspan=1)
