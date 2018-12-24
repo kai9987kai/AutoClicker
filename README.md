@@ -17,4 +17,4 @@ Pyautogui Module
 
 [Download](https://pypi.org/project/PyAutoGUI/#files)
 
-![](https://kai9987kai.github.io/shot.PNG)
+![](https://kai9987kai.github.io/new.PNG)
