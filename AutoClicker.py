@@ -6,7 +6,6 @@ from tkinter import *
 from tkinter import messagebox
 import keyboard
 
-
 class Coordinates():
     replayBtn = (100,350)
 class YourGUI(tk.Tk):
@@ -50,7 +49,6 @@ class YourGUI(tk.Tk):
         self.config(menu=menu)
         tk.Label(self, text="Keyboard key to\n Stop Clicking is the s key", background="#ebdbff").grid(row=3, column=3)
 
-
     def EXITME(self):
         exit(0)  # crashed prog so it closes
         # strtoint("crashmE!")
@@ -71,10 +69,7 @@ class YourGUI(tk.Tk):
             pyautogui.click(x, y)
             if keyboard.is_pressed('s'):
                 break
-
-
-
-
+              
 if __name__ == '__main__':
     your_gui = YourGUI()
     your_gui.title('AutoClicker') # Set title
