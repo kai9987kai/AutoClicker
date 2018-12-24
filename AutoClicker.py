@@ -6,10 +6,8 @@ from tkinter import *
 from tkinter import messagebox
 import keyboard
 
-
 class Coordinates():
     replayBtn = (100, 350)
-
 
 class YourGUI(tk.Tk):
     def __init__(self):
@@ -26,7 +24,11 @@ class YourGUI(tk.Tk):
         # Start Button ⬇
         tk.Button(self, text="start", fg='green', command=self.do_conversion).grid(row=3, column=0, columnspan=2)
         # close button ⬇
-        tk.Button(self, text="exit!", fg='red', command=self.EXITME).grid(row=4, column=0, columnspan=2)
+        tk.Button(self, text="exit!", fg='red', command=self.EXITME).grid(row=4, column=0)
+
+        self.inputhotkey = tk.Entry(self)
+        self.inputhotkey.grid(row=1, column=3, columnspan=1)
+        tk.Button(self, text="   SET   ", fg='#ffbb1b', command=self.do_hotkey).grid(row=3, column=3, columnspan=4)
 
         def callback():
             webbrowser.open_new(r"https://kai9987kai.github.io/AutoClicker.html")
@@ -37,7 +39,7 @@ class YourGUI(tk.Tk):
         def callback3():
             webbrowser.open_new(r"https://autoclicker.webstarts.com/index.html?r=20181122215206")
 
-        tk.Button(self, text="ABOUT", command=callback).grid(row=4, column=2, columnspan=2)
+        tk.Button(self, text="ABOUT", command=callback).grid(row=4, column=1, columnspan=2)
 
         def clicked():
             messagebox.showinfo('CONTACT', 'Email: kai9987kai@gmail.com')
@@ -56,7 +58,7 @@ class YourGUI(tk.Tk):
         new_item2.add_command(label='Tutorial', command=callback3)
         menu.add_cascade(label='Help', menu=new_item2)
         self.config(menu=menu)
-        tk.Label(self, text="Keyboard key to\n Stop Clicking is the s key", background="#ebdbff").grid(row=3, column=3)
+        tk.Label(self, text="Keyboard key to stop clicking:", background="#ebdbff").grid(row=1, column=2)
 
     def EXITME(self):
         exit(0)  # crashed prog so it closes
@@ -76,9 +78,10 @@ class YourGUI(tk.Tk):
             # strtoint("crashmE!")
         while running:
             pyautogui.click(x, y)
-            if keyboard.is_pressed('s'):
+            if keyboard.is_pressed(self.inputhotkey.get()):
                 break
-
+    def do_hotkey(self):
+        hotkey = self.inputhotkey.get()
 
 if __name__ == '__main__':
     your_gui = YourGUI()
