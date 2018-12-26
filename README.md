@@ -3,7 +3,9 @@ It spams clicks on the selected Coordinates. Python Modules needed: pyautogui
 #
 Contact info:
 
-EMAIL: kai9987kai@Gmail.com
+EMAIL1: kai9987kai@Gmail.com
+EMAIL2: kai.piper@aol.com
+
 #
 Project links:
  
