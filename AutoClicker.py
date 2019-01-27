@@ -1,4 +1,4 @@
-from win10toast import ToastNotifier
+import win10toast
 import pyautogui
 import time
 import tkinter as tk
@@ -7,9 +7,13 @@ from tkinter import *
 from tkinter import messagebox
 import keyboard
 
+def update():
+    your_gui.update()
 def NOTIFICATION():
-    toaster = ToastNotifier()
-    toaster.show_toast("AutoClicker", "V1.0")
+    toaster = win10toast.ToastNotifier()
+    toaster.show_toast("AutoClicker", "V1.0", duration=1, threaded=True)
+    update()
+
 
 class Coordinates():
     replayBtn = (100, 350)
