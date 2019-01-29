@@ -7,13 +7,13 @@ from tkinter import *
 from tkinter import messagebox
 import keyboard
 from tkinter import ttk
+from _cffi_backend import callback
 
-def update():
-    your_gui.update()
 def NOTIFICATION():
     toaster = win10toast.ToastNotifier()
-    toaster.show_toast("AutoClicker", "V1.0", duration=1, threaded=True)
-    update()
+    toaster.show_toast("AutoClicker", "V1.5", duration=5, threaded=True)
+    messagebox.showinfo('AutoClicker', 'V1.5')
+
 def tutorial():
     window = Tk()
     window.title("Tutorial")
@@ -36,7 +36,7 @@ def tutorial():
 
 class Coordinates():
     replayBtn = (100, 350)
-def STYLE2():
+def MAINWINDOW_NEWSTYLE():
     class YourGUI(tk.Tk):
         def __init__(self):
             # inherit tkinter's window methods
@@ -67,6 +67,44 @@ def STYLE2():
 
             def clicked():
                 messagebox.showinfo('CONTACT', 'EmailOne: kai9987kai@gmail.com\nEmailTwo: kai.piper@aol.co.uk ')
+            def settings():
+                window = Tk()
+                window.title("Settings")
+                window.geometry('260x50')
+                window.iconbitmap('favicon.ico')
+                window.geometry("+0+0")
+                window.attributes("-topmost", True)
+
+                def callBackFunc():
+                    your_gui.overrideredirect(True)
+                    window.destroy()
+                def ExitWindow():
+                    window.destroy()
+                def Full_screen():
+                    your_gui.attributes('-fullscreen', True)
+                    your_gui.bind('<Escape>', lambda e: root.destroy())
+                    window.destroy()
+
+                ttk.Label(window, text="Settings").grid(column=0, row=0)
+                ttk.Button(window, text="Close", command=ExitWindow).grid(column=3, row=1)
+
+                chkValue = tk.BooleanVar()
+                chkValue.set(False)
+
+                chkExample = tk.Checkbutton(window, text='Hide Title Bar',
+                                            var=chkValue, command=callBackFunc)
+                chkExample.grid(column=0, row=1)
+                chkValue2 = tk.BooleanVar()
+                chkValue2.set(False)
+
+                chkExample2 = tk.Checkbutton(window, text='FullScreen',
+                                            var=chkValue2, command=Full_screen)
+                chkExample2.grid(column=2, row=1)
+                window.mainloop()
+            def OpenOldWindow():
+                your_gui.destroy()
+                OldStyleGUI()
+
 
             # Menu Bar!! ⬇
             menu = Menu(self)
@@ -75,7 +113,8 @@ def STYLE2():
             new_item.add_command(label='GITHUB PAGE', command=callback2)
             new_item.add_command(label='CONTACT', command=clicked)
             new_item.add_command(label='VERSION NUMBER', command=NOTIFICATION)
-            new_item.add_command(label='Original style', command=MainWindow)
+            new_item.add_command(label='OLD STYLE GUI', command=OpenOldWindow)
+            new_item.add_command(label='SETTINGS', command=settings)
             new_item.add_separator()
             new_item.add_command(label='START', command=self.do_conversion)
             new_item.add_command(label='EXIT', command=self.EXITME)
@@ -122,7 +161,7 @@ def STYLE2():
         your_gui.mainloop()
     time.sleep(0)
 
-def MainWindow():
+def OldStyleGUI():
     class YourGUI(tk.Tk):
         def __init__(self):
             # inherit tkinter's window methods
@@ -150,13 +189,50 @@ def MainWindow():
             def callback2():
                 webbrowser.open_new(r"https://github.com/kai9987kai/AutoClicker")
 
-            def callback3():
-                webbrowser.open_new(r"https://autoclicker.webstarts.com/index.html?r=20181122215206")
-
             tk.Button(self, text="ABOUT", command=callback).grid(row=4, column=1, columnspan=2)
 
             def clicked():
                 messagebox.showinfo('CONTACT', 'EmailOne: kai9987kai@gmail.com\nEmailTwo: kai.piper@aol.co.uk')
+
+            def settings():
+                window = Tk()
+                window.title("Settings")
+                window.geometry('260x50')
+                window.iconbitmap('favicon.ico')
+                window.geometry("+0+0")
+                window.attributes("-topmost", True)
+
+                def callBackFunc():
+                    your_gui.overrideredirect(True)
+                    window.destroy()
+                def ExitWindow():
+                    window.destroy()
+                def Full_screen():
+                    your_gui.attributes('-fullscreen', True)
+                    your_gui.bind('<Escape>', lambda e: root.destroy())
+                    window.destroy()
+
+                ttk.Label(window, text="Settings").grid(column=0, row=0)
+                ttk.Button(window, text="Close", command=ExitWindow).grid(column=3, row=1)
+
+                chkValue = tk.BooleanVar()
+                chkValue.set(False)
+
+                chkExample = tk.Checkbutton(window, text='Hide Title Bar',
+                                            var=chkValue, command=callBackFunc)
+                chkExample.grid(column=0, row=1)
+                chkValue2 = tk.BooleanVar()
+                chkValue2.set(False)
+
+                chkExample2 = tk.Checkbutton(window, text='FullScreen',
+                                            var=chkValue2, command=Full_screen)
+                chkExample2.grid(column=2, row=1)
+                window.mainloop()
+            def OpenModernWindow():
+                your_gui.destroy()
+                MAINWINDOW_NEWSTYLE()
+
+
 
             # Menu Bar!! ⬇
             menu = Menu(self)
@@ -165,11 +241,11 @@ def MainWindow():
             new_item.add_command(label='GITHUB PAGE', command=callback2)
             new_item.add_command(label='CONTACT', command=clicked)
             new_item.add_command(label='VERSION NUMBER', command=NOTIFICATION)
-            new_item.add_command(label='MODERN STYLE', command=STYLE2)
+            new_item.add_command(label='MODERN STYLE', command=OpenModernWindow)
+            new_item.add_command(label='SETTINGS', command=settings)
             new_item.add_separator()
             new_item.add_command(label='START', command=self.do_conversion)
             new_item.add_command(label='EXIT', command=self.EXITME)
-
             menu.add_cascade(label='Menu', menu=new_item)
             new_item2 = Menu(menu)
             new_item2.add_command(label='Tutorial', command=tutorial)
@@ -203,6 +279,8 @@ def MainWindow():
         def do_hotkey(self):
             hotkey = self.inputhotkey.get()
 
+
+
     if __name__ == '__main__':
         your_gui = YourGUI()
         your_gui.geometry("+300+300")
@@ -213,4 +291,4 @@ def MainWindow():
         your_gui.configure(background="#ebdbff")
         your_gui.mainloop()
     time.sleep(0)
-MainWindow()
+MAINWINDOW_NEWSTYLE()
