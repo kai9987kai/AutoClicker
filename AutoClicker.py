@@ -8,6 +8,7 @@ from tkinter import messagebox
 import keyboard
 from tkinter import ttk
 from _cffi_backend import callback
+import subprocess
 
 def NOTIFICATION():
     toaster = win10toast.ToastNotifier()
@@ -66,7 +67,9 @@ def MAINWINDOW_NEWSTYLE():
             ttk.Button(self, text="ABOUT", command=callback).grid(row=4, column=1, columnspan=2)
 
             def clicked():
-                messagebox.showinfo('CONTACT', 'EmailOne: kai9987kai@gmail.com\nEmailTwo: kai.piper@aol.co.uk ')
+                subprocess.call(["AutoClickerContactPage.exe"])
+
+
             def settings():
                 window = Tk()
                 window.title("Settings")
@@ -192,7 +195,8 @@ def OldStyleGUI():
             tk.Button(self, text="ABOUT", command=callback).grid(row=4, column=1, columnspan=2)
 
             def clicked():
-                messagebox.showinfo('CONTACT', 'EmailOne: kai9987kai@gmail.com\nEmailTwo: kai.piper@aol.co.uk')
+                subprocess.call(["AutoClickerContactPage.exe"])
+
 
             def settings():
                 window = Tk()
