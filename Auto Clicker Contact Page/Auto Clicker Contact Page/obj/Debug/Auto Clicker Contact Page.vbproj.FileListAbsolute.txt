@@ -1,0 +1,12 @@
+C:\Users\Kaipi\source\repos\Auto Clicker Contact Page\Auto Clicker Contact Page\bin\Debug\Auto Clicker Contact Page.pdb
+C:\Users\Kaipi\source\repos\Auto Clicker Contact Page\Auto Clicker Contact Page\bin\Debug\Auto Clicker Contact Page.xml
+C:\Users\Kaipi\source\repos\Auto Clicker Contact Page\Auto Clicker Contact Page\obj\Debug\Auto_Clicker_Contact_Page.Form1.resources
+C:\Users\Kaipi\source\repos\Auto Clicker Contact Page\Auto Clicker Contact Page\obj\Debug\Auto_Clicker_Contact_Page.Resources.resources
+C:\Users\Kaipi\source\repos\Auto Clicker Contact Page\Auto Clicker Contact Page\obj\Debug\Auto Clicker Contact Page.vbproj.GenerateResource.cache
+C:\Users\Kaipi\source\repos\Auto Clicker Contact Page\Auto Clicker Contact Page\obj\Debug\Auto Clicker Contact Page.vbproj.CoreCompileInputs.cache
+C:\Users\Kaipi\source\repos\Auto Clicker Contact Page\Auto Clicker Contact Page\obj\Debug\Auto Clicker Contact Page.xml
+C:\Users\Kaipi\source\repos\Auto Clicker Contact Page\Auto Clicker Contact Page\obj\Debug\Auto Clicker Contact Page.pdb
+C:\Users\Kaipi\source\repos\Auto Clicker Contact Page\Auto Clicker Contact Page\obj\Debug\Auto Clicker Contact Page.vbprojAssemblyReference.cache
+C:\Users\Kaipi\source\repos\Auto Clicker Contact Page\Auto Clicker Contact Page\bin\Debug\Auto Clicker Contact Page.exe.config
+C:\Users\Kaipi\source\repos\Auto Clicker Contact Page\Auto Clicker Contact Page\bin\Debug\Auto Clicker Contact Page.exe
+C:\Users\Kaipi\source\repos\Auto Clicker Contact Page\Auto Clicker Contact Page\obj\Debug\Auto Clicker Contact Page.exe
