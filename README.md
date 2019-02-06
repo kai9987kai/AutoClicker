@@ -1,20 +1,12 @@
-Welcome to the AutoClicker wiki!
-It spams clicks on the selected Coordinates. Python Modules needed: pyautogui, pywin32 and keyboard 
-#
-Contact info:
+# What a Auto Clicker is?
+It spams clicks on the selected X and Y Coordinates.
 
-EMAIL1: kai9987kai@Gmail.com
+# Help / How to use the software
+Fist get the mouses X and Y coordinates by using the software linked below or the python script inside the Find Coordinates file inculed with the project.
 
-EMAIL2: kai.piper@aol.com
+[Downloads](http://www.adminsehow.com/wp-content/uploads/2012/03/MousePos.exe)
 
-Website: [https://kai9987kai.github.io/AutoClicker.html](https://kai9987kai.github.io/AutoClicker.html)
-
-#
-Project links:
- 
-  [About page](https://kai9987kai.github.io/AutoClicker.html)
-#
-Python modules needed to run:
+# Python Modules Requirements:
 
 Keyboard Module
 
@@ -22,6 +14,29 @@ Keyboard Module
 
 Pyautogui Module
 
-[Download](https://pypi.org/project/PyAutoGUI/#files)
+[Download](https://pypi.org/project/PyAutoGUI/)
+
+pywin32
+
+[Download](https://pypi.org/project/pywin32/)
+
+# Contact info:
+
+EMAIL1: kai9987kai@Gmail.com
+
+EMAIL2: kai.piper@aol.com
+
+Website: [https://kai9987kai.github.io/AutoClicker.html](https://kai9987kai.github.io/AutoClicker.html)
+
+
+# Project links:
+ 
+  [About page](https://kai9987kai.github.io/AutoClicker.html)
+  
+# TO DO LIST
+Build an exe for the latest version 
+
+Add a feature to run a list of coordinates
 
 ![](https://kai9987kai.github.io/new.PNG)
+
