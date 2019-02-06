@@ -7,7 +7,7 @@ EMAIL1: kai9987kai@Gmail.com
 
 EMAIL2: kai.piper@aol.com
 
-[Website](https://kai9987kai.github.io/AutoClicker.html)
+Website: [https://kai9987kai.github.io/AutoClicker.html](https://kai9987kai.github.io/AutoClicker.html)
 
 #
 Project links:
