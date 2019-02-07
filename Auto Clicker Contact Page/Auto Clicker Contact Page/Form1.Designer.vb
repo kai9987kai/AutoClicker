@@ -28,6 +28,7 @@ Partial Class Form1
         Me.Label2 = New System.Windows.Forms.Label()
         Me.Label1 = New System.Windows.Forms.Label()
         Me.Button1 = New System.Windows.Forms.Button()
+        Me.LinkLabel1 = New System.Windows.Forms.LinkLabel()
         Me.SuspendLayout()
         '
         'Label4
@@ -47,9 +48,9 @@ Partial Class Form1
         Me.Label3.Font = New System.Drawing.Font("Yu Gothic UI", 14.25!)
         Me.Label3.Location = New System.Drawing.Point(8, 113)
         Me.Label3.Name = "Label3"
-        Me.Label3.Size = New System.Drawing.Size(322, 25)
+        Me.Label3.Size = New System.Drawing.Size(83, 25)
         Me.Label3.TabIndex = 8
-        Me.Label3.Text = "Website: https://kai9987kai.github.io/"
+        Me.Label3.Text = "Website:"
         '
         'Label2
         '
@@ -80,11 +81,23 @@ Partial Class Form1
         Me.Button1.Text = "Close"
         Me.Button1.UseVisualStyleBackColor = True
         '
+        'LinkLabel1
+        '
+        Me.LinkLabel1.AutoSize = True
+        Me.LinkLabel1.Font = New System.Drawing.Font("Yu Gothic UI", 14.25!)
+        Me.LinkLabel1.Location = New System.Drawing.Point(85, 113)
+        Me.LinkLabel1.Name = "LinkLabel1"
+        Me.LinkLabel1.Size = New System.Drawing.Size(246, 25)
+        Me.LinkLabel1.TabIndex = 10
+        Me.LinkLabel1.TabStop = True
+        Me.LinkLabel1.Text = "https://kai9987kai.github.io/"
+        '
         'Form1
         '
         Me.AutoScaleDimensions = New System.Drawing.SizeF(6.0!, 13.0!)
         Me.AutoScaleMode = System.Windows.Forms.AutoScaleMode.Font
-        Me.ClientSize = New System.Drawing.Size(345, 171)
+        Me.ClientSize = New System.Drawing.Size(339, 170)
+        Me.Controls.Add(Me.LinkLabel1)
         Me.Controls.Add(Me.Button1)
         Me.Controls.Add(Me.Label3)
         Me.Controls.Add(Me.Label2)
@@ -105,4 +118,5 @@ Partial Class Form1
     Friend WithEvents Label2 As Label
     Friend WithEvents Label1 As Label
     Friend WithEvents Button1 As Button
+    Friend WithEvents LinkLabel1 As LinkLabel
 End Class

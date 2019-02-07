@@ -9,3 +9,14 @@ C:\Users\Kaipi\source\repos\Auto Clicker Mega Spam\Auto Clicker Mega Spam\bin\De
 C:\Users\Kaipi\source\repos\Auto Clicker Mega Spam\Auto Clicker Mega Spam\obj\Debug\Auto Clicker Mega Spam.exe
 C:\Users\Kaipi\source\repos\Auto Clicker Mega Spam\Auto Clicker Mega Spam\obj\Debug\Auto Clicker Mega Spam.xml
 C:\Users\Kaipi\source\repos\Auto Clicker Mega Spam\Auto Clicker Mega Spam\obj\Debug\Auto Clicker Mega Spam.pdb
+C:\Users\Kaipi\Documents\GitHub\AutoClicker\Auto Clicker Mega Spam\Auto Clicker Mega Spam\bin\Debug\Auto Clicker Mega Spam.exe
+C:\Users\Kaipi\Documents\GitHub\AutoClicker\Auto Clicker Mega Spam\Auto Clicker Mega Spam\bin\Debug\Auto Clicker Mega Spam.pdb
+C:\Users\Kaipi\Documents\GitHub\AutoClicker\Auto Clicker Mega Spam\Auto Clicker Mega Spam\bin\Debug\Auto Clicker Mega Spam.xml
+C:\Users\Kaipi\Documents\GitHub\AutoClicker\Auto Clicker Mega Spam\Auto Clicker Mega Spam\obj\Debug\Auto Clicker Mega Spam.vbprojAssemblyReference.cache
+C:\Users\Kaipi\Documents\GitHub\AutoClicker\Auto Clicker Mega Spam\Auto Clicker Mega Spam\obj\Debug\Auto_Clicker_Mega_Spam.Form1.resources
+C:\Users\Kaipi\Documents\GitHub\AutoClicker\Auto Clicker Mega Spam\Auto Clicker Mega Spam\obj\Debug\Auto_Clicker_Mega_Spam.Resources.resources
+C:\Users\Kaipi\Documents\GitHub\AutoClicker\Auto Clicker Mega Spam\Auto Clicker Mega Spam\obj\Debug\Auto Clicker Mega Spam.vbproj.GenerateResource.cache
+C:\Users\Kaipi\Documents\GitHub\AutoClicker\Auto Clicker Mega Spam\Auto Clicker Mega Spam\obj\Debug\Auto Clicker Mega Spam.vbproj.CoreCompileInputs.cache
+C:\Users\Kaipi\Documents\GitHub\AutoClicker\Auto Clicker Mega Spam\Auto Clicker Mega Spam\obj\Debug\Auto Clicker Mega Spam.exe
+C:\Users\Kaipi\Documents\GitHub\AutoClicker\Auto Clicker Mega Spam\Auto Clicker Mega Spam\obj\Debug\Auto Clicker Mega Spam.xml
+C:\Users\Kaipi\Documents\GitHub\AutoClicker\Auto Clicker Mega Spam\Auto Clicker Mega Spam\obj\Debug\Auto Clicker Mega Spam.pdb
