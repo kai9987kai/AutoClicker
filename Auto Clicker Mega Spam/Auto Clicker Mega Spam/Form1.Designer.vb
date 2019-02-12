@@ -70,9 +70,9 @@ Partial Class Form1
         Me.Label2.AutoSize = True
         Me.Label2.Location = New System.Drawing.Point(12, 63)
         Me.Label2.Name = "Label2"
-        Me.Label2.Size = New System.Drawing.Size(217, 13)
+        Me.Label2.Size = New System.Drawing.Size(212, 13)
         Me.Label2.TabIndex = 8
-        Me.Label2.Text = "Spam any amount of click is in nanoseconds"
+        Me.Label2.Text = "Spam any amount of clicks in nanoseconds"
         '
         'Form1
         '

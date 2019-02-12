@@ -7,8 +7,9 @@ from tkinter import *
 from tkinter import messagebox
 import keyboard
 from tkinter import ttk
-from _cffi_backend import callback
-import subprocess
+import os
+
+
 
 def NOTIFICATION():
     toaster = win10toast.ToastNotifier()
@@ -64,11 +65,92 @@ def MAINWINDOW_NEWSTYLE():
             def callback2():
                 webbrowser.open_new(r"https://github.com/kai9987kai/AutoClicker")
 
-            ttk.Button(self, text="ABOUT", command=callback).grid(row=4, column=1, columnspan=2)
+            ttk.Button(self, text="ABOUT", command=callback).grid(row=4, column=3)
+
+            def clicked3():
+                your_gui.destroy()
+                pyautogui.PAUSE = 0.50
+                pyautogui.FAILSAFE = True
+
+                things = []
+                root = Tk()
+                root.geometry("500x350")
+
+                list_box = Listbox(root, font=(12))
+                list_box.config(width=30, height=18)
+                list_box.place(x=0, y=0)
+
+                run_btn = Button(root, text="Run List", command=lambda: run_list(), font=(12))
+                run_btn.place(x=350, y=15)
+                run_btn.config(width=15)
+
+                del_btn = Button(root, text="Delete", command=lambda: delete(list_box), font=(12))
+                del_btn.place(x=350, y=90)
+                del_btn.config(width=15)
+
+                add_btn = Button(root, text="Add", command=lambda: add(), font=(12))
+                add_btn.place(x=350, y=50)
+                add_btn.config(width=15)
+
+                x_txt = StringVar()
+                y_txt = StringVar()
+
+                x_label = Label(root, text="x", font=(12))
+                x_label.place(x=320, y=150)
+
+                x = Entry(root, textvariable=x_txt)
+                x.place(x=350, y=150)
+
+                x_txt.set('')
+                y_label = Label(root, text="y", font=(12))
+                y_label.place(x=320, y=170)
+
+                y = Entry(root, textvariable=y_txt)
+                y.place(x=350, y=170)
+                y_txt.set('')
+                root.title("AutoClicker - list of coordinates")
+                root.iconbitmap('favicon.ico')
+                root.resizable(False, False)
+                root.attributes("-topmost", True)
+
+                def add():
+                    content_x = x_txt.get()
+                    content_y = y_txt.get()
+                    closed_str = [content_x, content_y]
+                    things.append(closed_str)
+                    list_box.delete(0, 'end')
+                    for i in range(len(things)):
+                        list_box.insert(END, things[i])
+
+                def run_list():
+                    x_cords = [item[0] for item in things]
+                    y_cords = [item[1] for item in things]
+
+                    for i in range(len(things)):
+                        screenWidth, screenHeight = pyautogui.size()
+                        currentMouseX, currentMouseY = pyautogui.position()
+                        pyautogui.moveTo(int(x_cords[i]), int(y_cords[i]))
+                        # print("Gonna Click",x_cords[i],y_cords[i])
+                        pyautogui.click()
+
+                def delete(listbox):
+                    global things
+                    # Delete from Listbox
+                    selection = list_box.curselection()
+                    list_box.delete(selection[0])
+                    # Delete from list that provided it
+                    value = eval(list_box.get(selection[0]))
+                    ind = things.index(value)
+                    del (things[ind])
+
+                root.mainloop()
 
             def clicked():
-                subprocess.call(["AutoClickerContactPage.exe"])
+                os.startfile("AutoClickerContactPage.exe")
+            def clicked2():
+                os.startfile("AutoClickerMegaSpam.exe")
 
+            ttk.Button(self, text="List Coordinates", command=clicked3).grid(row=4, column=2)
 
             def settings():
                 window = Tk()
@@ -114,10 +196,11 @@ def MAINWINDOW_NEWSTYLE():
             new_item = Menu(menu)
             new_item.add_command(label='ABOUT', command=callback)
             new_item.add_command(label='GITHUB PAGE', command=callback2)
-            new_item.add_command(label='CONTACT', command=clicked)
+            new_item.add_command(label='AUTO CLICKER MEGA SPAM', command=clicked2)
             new_item.add_command(label='VERSION NUMBER', command=NOTIFICATION)
             new_item.add_command(label='OLD STYLE GUI', command=OpenOldWindow)
             new_item.add_command(label='SETTINGS', command=settings)
+            new_item.add_command(label='LIST OF COORDINATES', command=clicked3)
             new_item.add_separator()
             new_item.add_command(label='START', command=self.do_conversion)
             new_item.add_command(label='EXIT', command=self.EXITME)
@@ -126,6 +209,7 @@ def MAINWINDOW_NEWSTYLE():
             new_item2 = Menu(menu)
             new_item2.add_command(label='Tutorial', command=tutorial)
             menu.add_cascade(label='Help', menu=new_item2)
+            new_item2.add_command(label='Contact', command=clicked)
             self.config(menu=menu)
             tk.Label(self, text="Keyboard key to stop clicking:", background="#ebdbff").grid(row=1, column=2)
 
@@ -192,10 +276,89 @@ def OldStyleGUI():
             def callback2():
                 webbrowser.open_new(r"https://github.com/kai9987kai/AutoClicker")
 
-            tk.Button(self, text="ABOUT", command=callback).grid(row=4, column=1, columnspan=2)
+            tk.Button(self, text="ABOUT", command=callback).grid(row=4, column=3)
 
+            def clicked3():
+                your_gui.destroy()
+                pyautogui.PAUSE = 0.50
+                pyautogui.FAILSAFE = True
+
+                things = []
+                root = Tk()
+                root.geometry("500x350")
+
+                list_box = Listbox(root, font=(12))
+                list_box.config(width=30, height=18)
+                list_box.place(x=0, y=0)
+
+                run_btn = Button(root, text="Run List", command=lambda: run_list(), font=(12))
+                run_btn.place(x=350, y=15)
+                run_btn.config(width=15)
+
+                del_btn = Button(root, text="Delete", command=lambda: delete(list_box), font=(12))
+                del_btn.place(x=350, y=90)
+                del_btn.config(width=15)
+
+                add_btn = Button(root, text="Add", command=lambda: add(), font=(12))
+                add_btn.place(x=350, y=50)
+                add_btn.config(width=15)
+
+                x_txt = StringVar()
+                y_txt = StringVar()
+
+                x_label = Label(root, text="x", font=(12))
+                x_label.place(x=320, y=150)
+
+                x = Entry(root, textvariable=x_txt)
+                x.place(x=350, y=150)
+
+                x_txt.set('')
+                y_label = Label(root, text="y", font=(12))
+                y_label.place(x=320, y=170)
+
+                y = Entry(root, textvariable=y_txt)
+                y.place(x=350, y=170)
+                y_txt.set('')
+
+                def add():
+                    content_x = x_txt.get()
+                    content_y = y_txt.get()
+                    closed_str = [content_x, content_y]
+                    things.append(closed_str)
+                    list_box.delete(0, 'end')
+                    for i in range(len(things)):
+                        list_box.insert(END, things[i])
+
+                def run_list():
+                    x_cords = [item[0] for item in things]
+                    y_cords = [item[1] for item in things]
+
+                    for i in range(len(things)):
+                        screenWidth, screenHeight = pyautogui.size()
+                        currentMouseX, currentMouseY = pyautogui.position()
+                        pyautogui.moveTo(int(x_cords[i]), int(y_cords[i]))
+                        # print("Gonna Click",x_cords[i],y_cords[i])
+                        pyautogui.click()
+
+                def delete(listbox):
+                    global things
+                    # Delete from Listbox
+                    selection = list_box.curselection()
+                    list_box.delete(selection[0])
+                    # Delete from list that provided it
+                    value = eval(list_box.get(selection[0]))
+                    ind = things.index(value)
+                    del (things[ind])
+                root.title("AutoClicker - list of coordinates")
+                root.iconbitmap('favicon.ico')
+                root.resizable(False, False)
+                root.attributes("-topmost", True)
+                root.mainloop()
+
+            tk.Button(self, text="List of Coordinates", command=clicked3).grid(row=4, column=2)
             def clicked():
-                subprocess.call(["AutoClickerContactPage.exe"])
+                os.startfile("AutoClickerContactPage.exe")
+
 
 
             def settings():
@@ -243,7 +406,7 @@ def OldStyleGUI():
             new_item = Menu(menu)
             new_item.add_command(label='ABOUT', command=callback)
             new_item.add_command(label='GITHUB PAGE', command=callback2)
-            new_item.add_command(label='CONTACT', command=clicked)
+            new_item.add_command(label='LIST OF COORDINATES', command=clicked3)
             new_item.add_command(label='VERSION NUMBER', command=NOTIFICATION)
             new_item.add_command(label='MODERN STYLE', command=OpenModernWindow)
             new_item.add_command(label='SETTINGS', command=settings)
@@ -253,6 +416,7 @@ def OldStyleGUI():
             menu.add_cascade(label='Menu', menu=new_item)
             new_item2 = Menu(menu)
             new_item2.add_command(label='Tutorial', command=tutorial)
+            new_item2.add_command(label='Contact', command=clicked)
             menu.add_cascade(label='Help', menu=new_item2)
             self.config(menu=menu)
             tk.Label(self, text="Keyboard key to stop clicking:", background="#ebdbff").grid(row=1, column=2)
