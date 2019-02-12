@@ -33,8 +33,6 @@ Website: [https://kai9987kai.github.io/AutoClicker.html](https://kai9987kai.gith
  
   [About page](https://kai9987kai.github.io/AutoClicker.html)
   
-# TO DO LIST
-Build an exe for the latest version 
 # Set the program up how you what it to look
 
 style number 1 
