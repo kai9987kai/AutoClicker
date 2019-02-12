@@ -35,7 +35,12 @@ Website: [https://kai9987kai.github.io/AutoClicker.html](https://kai9987kai.gith
   
 # TO DO LIST
 Build an exe for the latest version 
+# Set the program up how you what it to look
 
-![](https://kai9987kai.github.io/new.PNG)
+style number 1 
 
-![](https://raw.githubusercontent.com/kai9987kai/kai9987kai.github.io/master/Capture11.PNG)
+![](https://raw.githubusercontent.com/kai9987kai/kai9987kai.github.io/master/ScreenShot.PNG)
+
+style number 2
+
+![](https://raw.githubusercontent.com/kai9987kai/kai9987kai.github.io/master/ScreenShot2.PNG)
