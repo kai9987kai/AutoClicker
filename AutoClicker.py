@@ -10,11 +10,10 @@ from tkinter import ttk
 import os
 
 
-
 def NOTIFICATION():
     toaster = win10toast.ToastNotifier()
-    toaster.show_toast("AutoClicker", "V1.5", duration=5, threaded=True)
-    messagebox.showinfo('AutoClicker', 'V1.5')
+    toaster.show_toast("AutoClicker", "V2.0", duration=5, threaded=True)
+    messagebox.showinfo('AutoClicker', 'V2.0')
 
 def tutorial():
     window = Tk()
@@ -220,6 +219,14 @@ def MAINWINDOW_NEWSTYLE():
         def do_conversion(self):
             y = self.inputY.get()
             x = self.inputX.get()
+
+            def action():
+                YourGUI.destroy()
+
+            image = Image.open("favicon.png")
+            menu = (item('Help', action), item('Close', action))
+            icon = pystray.Icon("name", image, "test", menu)
+            icon.run()
 
             running = True
             try:
