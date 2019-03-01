@@ -11,4 +11,28 @@
         Process.Start("https://kai9987kai.github.io")
 
     End Sub
+
+    Private Sub ToolTip1_Popup(sender As Object, e As PopupEventArgs) Handles ToolTip1.Popup
+        Dim buttonToolTip As New ToolTip()
+
+        buttonToolTip.ToolTipTitle = "Button Tooltip"
+
+        buttonToolTip.UseFading = True
+
+        buttonToolTip.UseAnimation = True
+
+        buttonToolTip.IsBalloon = True
+
+        buttonToolTip.ShowAlways = True
+
+        buttonToolTip.AutoPopDelay = 5000
+
+        buttonToolTip.InitialDelay = 1000
+
+        buttonToolTip.ReshowDelay = 500
+
+        buttonToolTip.IsBalloon = True
+
+        buttonToolTip.SetToolTip(Button1, "Click me to execute.")
+    End Sub
 End Class
