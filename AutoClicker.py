@@ -26,7 +26,7 @@ def tutorial():
     tab_control.add(tab2, text='Second Step')
     lbl1 = Label(tab1, anchor=W, text='First Get the coordinates download the software\n linked here ➡ http://www.adminsehow.com/wp-content/uploads/2012/03/MousePos.exe or use the python script inside the github project.')
     lbl1.grid(column=0, row=0)
-    lbl2 = Label(tab2, text='Input the X and Y coordinates into the Z and Y boxes set a key as the stop key and press start you can use the stop key to stop the clicking')
+    lbl2 = Label(tab2, text='Input the X and Y coordinates into the X and Y entry boxes set a key as the stop key and press start you can use the stop key to stop the clicking')
     lbl2.grid(column=0, row=0)
     tab_control.pack(expand=1, fill='both')
     window.iconbitmap('favicon.ico')
