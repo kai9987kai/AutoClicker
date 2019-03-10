@@ -15,6 +15,7 @@ def NOTIFICATION():
     toaster.show_toast("AutoClicker", "V2.0", duration=5, threaded=True)
     messagebox.showinfo('AutoClicker', 'V2.0')
 
+
 def tutorial():
     window = Tk()
     window.title("Tutorial")
@@ -24,9 +25,11 @@ def tutorial():
     tab2 = ttk.Frame(tab_control)
     tab_control.add(tab1, text='First Step')
     tab_control.add(tab2, text='Second Step')
-    lbl1 = Label(tab1, anchor=W, text='First Get the coordinates download the software\n linked here ➡ http://www.adminsehow.com/wp-content/uploads/2012/03/MousePos.exe or use the python script inside the github project.')
+    lbl1 = Label(tab1, anchor=W,
+                 text='First Get the coordinates download the software\n linked here ➡ http://www.adminsehow.com/wp-content/uploads/2012/03/MousePos.exe or use the python script inside the github project.')
     lbl1.grid(column=0, row=0)
-    lbl2 = Label(tab2, text='Input the X and Y coordinates into the X and Y entry boxes set a key as the stop key and press start you can use the stop key to stop the clicking')
+    lbl2 = Label(tab2,
+                 text='Input the X and Y coordinates into the X and Y entry boxes set a key as the stop key and press start you can use the stop key to stop the clicking')
     lbl2.grid(column=0, row=0)
     tab_control.pack(expand=1, fill='both')
     window.iconbitmap('favicon.ico')
@@ -35,8 +38,11 @@ def tutorial():
     window.geometry("+300+300")
     window.mainloop()
 
+
 class Coordinates():
     replayBtn = (100, 350)
+
+
 def MAINWINDOW_NEWSTYLE():
     class YourGUI(tk.Tk):
         def __init__(self):
@@ -57,6 +63,7 @@ def MAINWINDOW_NEWSTYLE():
             self.inputhotkey = ttk.Entry(self)
             self.inputhotkey.grid(row=1, column=3, columnspan=1)
             ttk.Button(self, text="   SET   ", command=self.do_hotkey).grid(row=3, column=3, columnspan=4)
+
 
             def callback():
                 webbrowser.open_new(r"https://kai9987kai.github.io/AutoClicker.html")
@@ -142,14 +149,30 @@ def MAINWINDOW_NEWSTYLE():
                     ind = things.index(value)
                     del (things[ind])
 
+                popup = Menu(root, tearoff=0)
+                popup.add_command(label='Run list', command=run_list)
+                popup.add_command(label='Exit', command=self.EXITME)
+
+                def do_popup(event):
+                    # display the popup menu
+                    try:
+                        popup.tk_popup(event.x_root, event.y_root, 0)
+                    finally:
+                        # make sure to release the grab (Tk 8.0a1 only)
+                        popup.grab_release()
+
+                root.bind("<Button-3>", do_popup)
+
                 root.mainloop()
 
             def clicked():
                 os.startfile("AutoClickerContactPage.exe")
+
             def clicked2():
                 os.startfile("AutoClickerMegaSpam.exe")
 
             ttk.Button(self, text="List Coordinates", command=clicked3).grid(row=4, column=2)
+
 
             def settings():
                 window = Tk()
@@ -162,8 +185,10 @@ def MAINWINDOW_NEWSTYLE():
                 def callBackFunc():
                     your_gui.overrideredirect(True)
                     window.destroy()
+
                 def ExitWindow():
                     window.destroy()
+
                 def Full_screen():
                     your_gui.attributes('-fullscreen', True)
                     your_gui.bind('<Escape>', lambda e: root.destroy())
@@ -182,13 +207,28 @@ def MAINWINDOW_NEWSTYLE():
                 chkValue2.set(False)
 
                 chkExample2 = tk.Checkbutton(window, text='FullScreen',
-                                            var=chkValue2, command=Full_screen)
+                                             var=chkValue2, command=Full_screen)
                 chkExample2.grid(column=2, row=1)
+                popup = Menu(your_gui, tearoff=0)
+                popup.add_command(label="FullScreen", command=Full_screen)
+                popup.add_command(label="Hide Title Bar", command=callBackFunc)
+                popup.add_command(label="Exit", command=ExitWindow)
+
+                def do_popup(event):
+
+                    try:
+
+                        popup.tk_popup(event.x_root, event.y_root, 0)
+                    finally:
+                        popup.grab_release()
+
+                window.bind("<Button-3>", do_popup)
+
                 window.mainloop()
+
             def OpenOldWindow():
                 your_gui.destroy()
                 OldStyleGUI()
-
 
             # Menu Bar!! ⬇
             menu = Menu(self)
@@ -211,6 +251,28 @@ def MAINWINDOW_NEWSTYLE():
             new_item2.add_command(label='Contact', command=clicked)
             self.config(menu=menu)
             tk.Label(self, text="Keyboard key to stop clicking:", background="#ebdbff").grid(row=1, column=2)
+            popup = Menu(self, tearoff=0)
+            popup.add_command(label="About", command=callback)  # , command=next) etc...
+            popup.add_command(label='GitHub Page', command=callback2)
+            popup.add_command(label='Auto Clicker Mega Spam', command=clicked2)
+            popup.add_command(label='Version Number', command=NOTIFICATION)
+            popup.add_command(label='Old Style Gui', command=OpenOldWindow)
+            popup.add_command(label='Settings', command=settings)
+            popup.add_command(label='List of coordinates', command=clicked3)
+            popup.add_separator()
+            popup.add_command(label='START', command=self.do_conversion)
+            popup.add_command(label='Exit', command=self.EXITME)
+
+
+            def do_popup(event):
+                # display the popup menu
+                try:
+                    popup.tk_popup(event.x_root, event.y_root, 0)
+                finally:
+                    # make sure to release the grab (Tk 8.0a1 only)
+                    popup.grab_release()
+
+            self.bind("<Button-3>", do_popup)
 
         def EXITME(self):
             exit(0)  # crashed prog so it closes
@@ -254,6 +316,7 @@ def MAINWINDOW_NEWSTYLE():
         your_gui.configure(background="#ebdbff")
         your_gui.mainloop()
     time.sleep(0)
+
 
 def OldStyleGUI():
     class YourGUI(tk.Tk):
@@ -356,6 +419,21 @@ def OldStyleGUI():
                     value = eval(list_box.get(selection[0]))
                     ind = things.index(value)
                     del (things[ind])
+                popup = Menu(root, tearoff=0)
+                popup.add_command(label='Run list', command=run_list)
+                popup.add_command(label='Exit', command=self.EXITME)
+
+                def do_popup(event):
+                    # display the popup menu
+                    try:
+                        popup.tk_popup(event.x_root, event.y_root, 0)
+                    finally:
+                        # make sure to release the grab (Tk 8.0a1 only)
+                        popup.grab_release()
+                
+
+                root.bind("<Button-3>", do_popup)
+
                 root.title("AutoClicker - list of coordinates")
                 root.iconbitmap('favicon.ico')
                 root.resizable(False, False)
@@ -363,10 +441,9 @@ def OldStyleGUI():
                 root.mainloop()
 
             tk.Button(self, text="List of Coordinates", command=clicked3).grid(row=4, column=2)
+
             def clicked():
                 os.startfile("AutoClickerContactPage.exe")
-
-
 
             def settings():
                 window = Tk()
@@ -379,8 +456,10 @@ def OldStyleGUI():
                 def callBackFunc():
                     your_gui.overrideredirect(True)
                     window.destroy()
+
                 def ExitWindow():
                     window.destroy()
+
                 def Full_screen():
                     your_gui.attributes('-fullscreen', True)
                     your_gui.bind('<Escape>', lambda e: root.destroy())
@@ -399,12 +478,29 @@ def OldStyleGUI():
                 chkValue2.set(False)
 
                 chkExample2 = tk.Checkbutton(window, text='FullScreen',
-                                            var=chkValue2, command=Full_screen)
+                                             var=chkValue2, command=Full_screen)
                 chkExample2.grid(column=2, row=1)
+                popup = Menu(your_gui, tearoff=0)
+                popup.add_command(label="FullScreen", command=Full_screen)
+                popup.add_command(label="Hide Title Bar", command=callBackFunc)
+                popup.add_command(label="Exit", command=ExitWindow)
+
+                def do_popup(event):
+
+                    try:
+
+                        popup.tk_popup(event.x_root, event.y_root, 0)
+                    finally:
+                        popup.grab_release()
+
+                window.bind("<Button-3>", do_popup)
                 window.mainloop()
+
             def OpenModernWindow():
                 your_gui.destroy()
                 MAINWINDOW_NEWSTYLE()
+            def clicked2():
+                os.startfile("AutoClickerMegaSpam.exe")
 
 
 
@@ -425,10 +521,30 @@ def OldStyleGUI():
             new_item2.add_command(label='Tutorial', command=tutorial)
             new_item2.add_command(label='Contact', command=clicked)
             menu.add_cascade(label='Help', menu=new_item2)
+            popup = Menu(self, tearoff=0)
+            popup.add_command(label="About", command=callback)  # , command=next) etc...
+            popup.add_command(label='GitHub Page', command=callback2)
+            popup.add_command(label='Auto Clicker Mega Spam', command=clicked2)
+            popup.add_command(label='Version Number', command=NOTIFICATION)
+            popup.add_command(label='Modern Style', command=OpenModernWindow)
+            popup.add_command(label='Settings', command=settings)
+            popup.add_command(label='List of coordinates', command=clicked3)
+            popup.add_separator()
+            popup.add_command(label='START', command=self.do_conversion)
+            popup.add_command(label='Exit', command=self.EXITME)
+
+
+            def do_popup(event):
+                # display the popup menu
+                try:
+                    popup.tk_popup(event.x_root, event.y_root, 0)
+                finally:
+                    # make sure to release the grab (Tk 8.0a1 only)
+                    popup.grab_release()
+
+            self.bind("<Button-3>", do_popup)
             self.config(menu=menu)
             tk.Label(self, text="Keyboard key to stop clicking:", background="#ebdbff").grid(row=1, column=2)
-
-
 
         def EXITME(self):
             exit(0)  # crashed prog so it closes
@@ -456,6 +572,7 @@ def OldStyleGUI():
 
 
 
+
     if __name__ == '__main__':
         your_gui = YourGUI()
         your_gui.geometry("+300+300")
@@ -466,4 +583,6 @@ def OldStyleGUI():
         your_gui.configure(background="#ebdbff")
         your_gui.mainloop()
     time.sleep(0)
+
+
 MAINWINDOW_NEWSTYLE()
