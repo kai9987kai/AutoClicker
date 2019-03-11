@@ -26,7 +26,7 @@ def tutorial():
     tab_control.add(tab1, text='First Step')
     tab_control.add(tab2, text='Second Step')
     lbl1 = Label(tab1, anchor=W,
-                 text='First Get the coordinates download the software\n linked here ➡ http://www.adminsehow.com/wp-content/uploads/2012/03/MousePos.exe or use the python script inside the github project.')
+                 text='First get the coordinates, use the software or python script inside the Find Coordinates in the github project to do this.')
     lbl1.grid(column=0, row=0)
     lbl2 = Label(tab2,
                  text='Input the X and Y coordinates into the X and Y entry boxes set a key as the stop key and press start you can use the stop key to stop the clicking')
@@ -64,7 +64,6 @@ def MAINWINDOW_NEWSTYLE():
             self.inputhotkey.grid(row=1, column=3, columnspan=1)
             ttk.Button(self, text="   SET   ", command=self.do_hotkey).grid(row=3, column=3, columnspan=4)
 
-
             def callback():
                 webbrowser.open_new(r"https://kai9987kai.github.io/AutoClicker.html")
 
@@ -86,15 +85,15 @@ def MAINWINDOW_NEWSTYLE():
                 list_box.config(width=30, height=18)
                 list_box.place(x=0, y=0)
 
-                run_btn = Button(root, text="Run List", command=lambda: run_list(), font=(12))
-                run_btn.place(x=350, y=15)
+                run_btn = ttk.Button(root, text="Run List", command=lambda: run_list())
+                run_btn.place(x=350, y=20)
                 run_btn.config(width=15)
 
-                del_btn = Button(root, text="Delete", command=lambda: delete(list_box), font=(12))
-                del_btn.place(x=350, y=90)
+                del_btn = ttk.Button(root, text="Delete", command=lambda: delete(list_box))
+                del_btn.place(x=350, y=80)
                 del_btn.config(width=15)
 
-                add_btn = Button(root, text="Add", command=lambda: add(), font=(12))
+                add_btn = ttk.Button(root, text="Add", command=lambda: add())
                 add_btn.place(x=350, y=50)
                 add_btn.config(width=15)
 
@@ -104,14 +103,14 @@ def MAINWINDOW_NEWSTYLE():
                 x_label = Label(root, text="x", font=(12))
                 x_label.place(x=320, y=150)
 
-                x = Entry(root, textvariable=x_txt)
+                x = ttk.Entry(root, textvariable=x_txt)
                 x.place(x=350, y=150)
 
                 x_txt.set('')
                 y_label = Label(root, text="y", font=(12))
                 y_label.place(x=320, y=170)
 
-                y = Entry(root, textvariable=y_txt)
+                y = ttk.Entry(root, textvariable=y_txt)
                 y.place(x=350, y=170)
                 y_txt.set('')
                 root.title("AutoClicker - list of coordinates")
@@ -172,7 +171,6 @@ def MAINWINDOW_NEWSTYLE():
                 os.startfile("AutoClickerMegaSpam.exe")
 
             ttk.Button(self, text="List Coordinates", command=clicked3).grid(row=4, column=2)
-
 
             def settings():
                 window = Tk()
@@ -262,7 +260,6 @@ def MAINWINDOW_NEWSTYLE():
             popup.add_separator()
             popup.add_command(label='START', command=self.do_conversion)
             popup.add_command(label='Exit', command=self.EXITME)
-
 
             def do_popup(event):
                 # display the popup menu
@@ -419,6 +416,7 @@ def OldStyleGUI():
                     value = eval(list_box.get(selection[0]))
                     ind = things.index(value)
                     del (things[ind])
+
                 popup = Menu(root, tearoff=0)
                 popup.add_command(label='Run list', command=run_list)
                 popup.add_command(label='Exit', command=self.EXITME)
@@ -430,7 +428,6 @@ def OldStyleGUI():
                     finally:
                         # make sure to release the grab (Tk 8.0a1 only)
                         popup.grab_release()
-                
 
                 root.bind("<Button-3>", do_popup)
 
@@ -499,10 +496,9 @@ def OldStyleGUI():
             def OpenModernWindow():
                 your_gui.destroy()
                 MAINWINDOW_NEWSTYLE()
+
             def clicked2():
                 os.startfile("AutoClickerMegaSpam.exe")
-
-
 
             # Menu Bar!! ⬇
             menu = Menu(self)
@@ -532,7 +528,6 @@ def OldStyleGUI():
             popup.add_separator()
             popup.add_command(label='START', command=self.do_conversion)
             popup.add_command(label='Exit', command=self.EXITME)
-
 
             def do_popup(event):
                 # display the popup menu
@@ -569,9 +564,6 @@ def OldStyleGUI():
 
         def do_hotkey(self):
             hotkey = self.inputhotkey.get()
-
-
-
 
     if __name__ == '__main__':
         your_gui = YourGUI()
