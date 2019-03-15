@@ -12,8 +12,8 @@ import os
 
 def NOTIFICATION():
     toaster = win10toast.ToastNotifier()
-    toaster.show_toast("AutoClicker", "V2.0", duration=5, threaded=True)
-    messagebox.showinfo('AutoClicker', 'V2.0')
+    toaster.show_toast("AutoClicker", "V3.0", duration=5, threaded=True)
+    messagebox.showinfo('AutoClicker', 'V3.0')
 
 
 def tutorial():
