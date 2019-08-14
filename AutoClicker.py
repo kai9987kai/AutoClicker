@@ -21,14 +21,14 @@ def NOTIFICATION():
 def tutorial():
     window = Tk()
     window.title("Tutorial")
-    window.geometry('750x100')
+    window.geometry('1010x50')
     tab_control = ttk.Notebook(window)
     tab1 = ttk.Frame(tab_control)
     tab2 = ttk.Frame(tab_control)
     tab_control.add(tab1, text='First Step')
     tab_control.add(tab2, text='Second Step')
     lbl1 = Label(tab1, anchor=W,
-                 text='First get the coordinates, use the software or python script inside the Find Coordinates in the github project to do this.')
+                 text='First get the coordinates, use the software or python script inside the Find Coordinates folder in the github project page to do this. There is a link to the github page in the menu selection bar.')
     lbl1.grid(column=0, row=0)
     lbl2 = Label(tab2,
                  text='Input the X and Y coordinates into the X and Y entry boxes set a key as the stop key and press start you can use the stop key to stop the clicking')
@@ -274,8 +274,7 @@ def MAINWINDOW_NEWSTYLE():
             self.bind("<Button-3>", do_popup)
 
         def EXITME(self):
-            exit(0)  # crashed prog so it closes
-            # strtoint("crashmE!")
+            YourGUI.destroy(self)
 
         def do_conversion(self):
             y = self.inputY.get()
@@ -284,10 +283,7 @@ def MAINWINDOW_NEWSTYLE():
             def action():
                 YourGUI.destroy()
 
-            image = Image.open("favicon.png")
-            menu = (item('Help', action), item('Close', action))
-            icon = pystray.Icon("name", image, "test", menu)
-            icon.run()
+
 
             running = True
             try:
