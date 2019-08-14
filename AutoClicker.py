@@ -8,12 +8,14 @@ from tkinter import messagebox
 import keyboard
 from tkinter import ttk
 import os
+import sys
+
 
 
 def NOTIFICATION():
     toaster = win10toast.ToastNotifier()
-    toaster.show_toast("AutoClicker", "V3.0", duration=5, threaded=True)
-    messagebox.showinfo('AutoClicker', 'V3.0')
+    toaster.show_toast("AutoClicker", "V4.0", duration=5, threaded=True)
+    messagebox.showinfo('AutoClicker', 'V4.0')
 
 
 def tutorial():
@@ -175,10 +177,11 @@ def MAINWINDOW_NEWSTYLE():
             def settings():
                 window = Tk()
                 window.title("Settings")
-                window.geometry('260x50')
+                window.geometry('259x94')
                 window.iconbitmap('favicon.ico')
                 window.geometry("+0+0")
                 window.attributes("-topmost", True)
+
 
                 def callBackFunc():
                     your_gui.overrideredirect(True)
@@ -191,22 +194,21 @@ def MAINWINDOW_NEWSTYLE():
                     your_gui.attributes('-fullscreen', True)
                     your_gui.bind('<Escape>', lambda e: root.destroy())
                     window.destroy()
+                def Exit_Full_Screen():
+                    python = sys.executable
+                    os.execl(python, python, * sys.argv)
+                def Show_Title_bar():
+                    python = sys.executable
+                    os.execl(python, python, * sys.argv)
 
-                ttk.Label(window, text="Settings").grid(column=0, row=0)
-                ttk.Button(window, text="Close", command=ExitWindow).grid(column=3, row=1)
+                ttk.Label(window, text="Settings").grid(column=0, row=1, sticky="ew")
+                ttk.Button(window, text="               Exit Settings               ", command=ExitWindow).grid(column=0, row= 6)
+                ttk.Button(window, text="‍‍FullScreen", command=Full_screen).grid(column=0, row=3, sticky="ew")
+                ttk.Button(window, text="Exit FullScreen", command=Exit_Full_Screen).grid(column=1, row=3, sticky="ew")
+                ttk.Button(window, text="Hide Title Bar ", command=callBackFunc).grid(column=0, row=5, sticky="ew")
+                ttk.Button(window, text="Show Title Bar", command=Show_Title_bar).grid(column=1, row=5, sticky="ew")
+                ttk.Button(window, text="Restart program", command=Show_Title_bar).grid(column=1, row=6, sticky="ew")
 
-                chkValue = tk.BooleanVar()
-                chkValue.set(False)
-
-                chkExample = tk.Checkbutton(window, text='Hide Title Bar',
-                                            var=chkValue, command=callBackFunc)
-                chkExample.grid(column=0, row=1)
-                chkValue2 = tk.BooleanVar()
-                chkValue2.set(False)
-
-                chkExample2 = tk.Checkbutton(window, text='FullScreen',
-                                             var=chkValue2, command=Full_screen)
-                chkExample2.grid(column=2, row=1)
                 popup = Menu(your_gui, tearoff=0)
                 popup.add_command(label="FullScreen", command=Full_screen)
                 popup.add_command(label="Hide Title Bar", command=callBackFunc)
@@ -445,10 +447,11 @@ def OldStyleGUI():
             def settings():
                 window = Tk()
                 window.title("Settings")
-                window.geometry('260x50')
+                window.geometry('259x94')
                 window.iconbitmap('favicon.ico')
                 window.geometry("+0+0")
                 window.attributes("-topmost", True)
+
 
                 def callBackFunc():
                     your_gui.overrideredirect(True)
@@ -461,22 +464,21 @@ def OldStyleGUI():
                     your_gui.attributes('-fullscreen', True)
                     your_gui.bind('<Escape>', lambda e: root.destroy())
                     window.destroy()
+                def Exit_Full_Screen():
+                    python = sys.executable
+                    os.execl(python, python, * sys.argv)
+                def Show_Title_bar():
+                    python = sys.executable
+                    os.execl(python, python, * sys.argv)
 
-                ttk.Label(window, text="Settings").grid(column=0, row=0)
-                ttk.Button(window, text="Close", command=ExitWindow).grid(column=3, row=1)
+                ttk.Label(window, text="Settings").grid(column=0, row=1, sticky="ew")
+                Button(window, text="               Exit Settings               ", command=ExitWindow).grid(column=0, row= 6)
+                Button(window, text="‍‍FullScreen", command=Full_screen).grid(column=0, row=3, sticky="ew")
+                Button(window, text="Exit FullScreen", command=Exit_Full_Screen).grid(column=1, row=3, sticky="ew")
+                Button(window, text="Hide Title Bar ", command=callBackFunc).grid(column=0, row=5, sticky="ew")
+                Button(window, text="Show Title Bar", command=Show_Title_bar).grid(column=1, row=5, sticky="ew")
+                Button(window, text="Restart program", command=Show_Title_bar).grid(column=1, row=6, sticky="ew")
 
-                chkValue = tk.BooleanVar()
-                chkValue.set(False)
-
-                chkExample = tk.Checkbutton(window, text='Hide Title Bar',
-                                            var=chkValue, command=callBackFunc)
-                chkExample.grid(column=0, row=1)
-                chkValue2 = tk.BooleanVar()
-                chkValue2.set(False)
-
-                chkExample2 = tk.Checkbutton(window, text='FullScreen',
-                                             var=chkValue2, command=Full_screen)
-                chkExample2.grid(column=2, row=1)
                 popup = Menu(your_gui, tearoff=0)
                 popup.add_command(label="FullScreen", command=Full_screen)
                 popup.add_command(label="Hide Title Bar", command=callBackFunc)
@@ -491,7 +493,9 @@ def OldStyleGUI():
                         popup.grab_release()
 
                 window.bind("<Button-3>", do_popup)
+
                 window.mainloop()
+
 
             def OpenModernWindow():
                 your_gui.destroy()
