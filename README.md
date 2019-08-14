@@ -1,5 +1,5 @@
 # What a Auto Clicker is?
-It spams clicks on the selected X and Y Coordinates.
+It spams clicks on the selected Coordinates, We also have a feature that allows for a list of coordinates to be performed and a mega auto clicker that is faster than the base version but is only limited by your computers specs.
 
 # Help / How to use the software
 Fist get the mouses X and Y coordinates by using the software linked below or the python script inside the Find Coordinates file inculed with the project.
