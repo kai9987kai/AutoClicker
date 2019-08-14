@@ -18,6 +18,7 @@ def NOTIFICATION():
     messagebox.showinfo('AutoClicker', 'V4.0')
 
 
+
 def tutorial():
     window = Tk()
     window.title("Tutorial")
@@ -28,7 +29,7 @@ def tutorial():
     tab_control.add(tab1, text='First Step')
     tab_control.add(tab2, text='Second Step')
     lbl1 = Label(tab1, anchor=W,
-                 text='First get the coordinates, use the software or python script inside the Find Coordinates folder in the github project page to do this. There is a link to the github page in the menu selection bar.')
+                 text='First get the coordinates, click on Find Coordinates the first number is the x coordinate and the second is the y coordinate.')
     lbl1.grid(column=0, row=0)
     lbl2 = Label(tab2,
                  text='Input the X and Y coordinates into the X and Y entry boxes set a key as the stop key and press start you can use the stop key to stop the clicking')
@@ -171,14 +172,18 @@ def MAINWINDOW_NEWSTYLE():
 
             def clicked2():
                 os.startfile("AutoClickerMegaSpam.exe")
+            def Finder():
+                os.startfile("MousePos.exe")
 
-            ttk.Button(self, text="List Coordinates", command=clicked3).grid(row=4, column=2)
+            ttk.Button(self, text="List Coordinates", command=clicked3).grid(row=4, column=2, sticky="ew")
+            ttk.Button(self, text="Find Coordinates", command=Finder).grid(row=3, column=2, sticky="ew")
 
             def settings():
                 window = Tk()
                 window.title("Settings")
                 window.geometry('259x94')
                 window.iconbitmap('favicon.ico')
+                window.resizable(False, False)
                 window.geometry("+0+0")
                 window.attributes("-topmost", True)
 
@@ -211,8 +216,11 @@ def MAINWINDOW_NEWSTYLE():
 
                 popup = Menu(your_gui, tearoff=0)
                 popup.add_command(label="FullScreen", command=Full_screen)
+                popup.add_command(label="Exit FullScreen", command=Exit_Full_Screen)
                 popup.add_command(label="Hide Title Bar", command=callBackFunc)
-                popup.add_command(label="Exit", command=ExitWindow)
+                popup.add_command(label="Show Title Bar", command=Show_Title_bar)
+                popup.add_command(label="Restart program", command=Show_Title_bar)
+                popup.add_command(label="Exit Settings", command=ExitWindow)
 
                 def do_popup(event):
 
@@ -233,16 +241,16 @@ def MAINWINDOW_NEWSTYLE():
             # Menu Bar!! ⬇
             menu = Menu(self)
             new_item = Menu(menu)
-            new_item.add_command(label='ABOUT', command=callback)
-            new_item.add_command(label='GITHUB PAGE', command=callback2)
-            new_item.add_command(label='AUTO CLICKER MEGA SPAM', command=clicked2)
-            new_item.add_command(label='VERSION NUMBER', command=NOTIFICATION)
-            new_item.add_command(label='OLD STYLE GUI', command=OpenOldWindow)
-            new_item.add_command(label='SETTINGS', command=settings)
-            new_item.add_command(label='LIST OF COORDINATES', command=clicked3)
+            new_item.add_command(label='About', command=callback)
+            new_item.add_command(label='Github Page', command=callback2)
+            new_item.add_command(label='Auto Clicker Mega Spam', command=clicked2)
+            new_item.add_command(label='Version Number', command=NOTIFICATION)
+            new_item.add_command(label='Old Style GUI', command=OpenOldWindow)
+            new_item.add_command(label='Settings', command=settings)
+            new_item.add_command(label='List of Coordinates', command=clicked3)
             new_item.add_separator()
-            new_item.add_command(label='START', command=self.do_conversion)
-            new_item.add_command(label='EXIT', command=self.EXITME)
+            new_item.add_command(label='Start', command=self.do_conversion)
+            new_item.add_command(label='Exit', command=self.EXITME)
 
             menu.add_cascade(label='Menu', menu=new_item)
             new_item2 = Menu(menu)
@@ -259,8 +267,9 @@ def MAINWINDOW_NEWSTYLE():
             popup.add_command(label='Old Style Gui', command=OpenOldWindow)
             popup.add_command(label='Settings', command=settings)
             popup.add_command(label='List of coordinates', command=clicked3)
+            popup.add_command(label='Find Coordinates', command=Finder)
             popup.add_separator()
-            popup.add_command(label='START', command=self.do_conversion)
+            popup.add_command(label='Start', command=self.do_conversion)
             popup.add_command(label='Exit', command=self.EXITME)
 
             def do_popup(event):
@@ -434,8 +443,11 @@ def OldStyleGUI():
                 root.resizable(False, False)
                 root.attributes("-topmost", True)
                 root.mainloop()
+            def Finder():
+                os.startfile("MousePos.exe")
 
-            tk.Button(self, text="List of Coordinates", command=clicked3).grid(row=4, column=2)
+            tk.Button(self, text="List Coordinates", command=clicked3).grid(row=4, column=2,sticky="ew")
+            tk.Button(self, text="Find Coordinates", command=Finder).grid(row=3, column=2, sticky="ew")
 
             def clicked():
                 os.startfile("AutoClickerContactPage.exe")
@@ -445,6 +457,7 @@ def OldStyleGUI():
                 window.title("Settings")
                 window.geometry('259x94')
                 window.iconbitmap('favicon.ico')
+                window.resizable(False, False)
                 window.geometry("+0+0")
                 window.attributes("-topmost", True)
 
@@ -477,8 +490,11 @@ def OldStyleGUI():
 
                 popup = Menu(your_gui, tearoff=0)
                 popup.add_command(label="FullScreen", command=Full_screen)
+                popup.add_command(label="Exit FullScreen", command=Exit_Full_Screen)
                 popup.add_command(label="Hide Title Bar", command=callBackFunc)
-                popup.add_command(label="Exit", command=ExitWindow)
+                popup.add_command(label="Show Title Bar", command=Show_Title_bar)
+                popup.add_command(label="Restart program", command=Show_Title_bar)
+                popup.add_command(label="Exit Settings", command=ExitWindow)
 
                 def do_popup(event):
 
@@ -503,30 +519,31 @@ def OldStyleGUI():
             # Menu Bar!! ⬇
             menu = Menu(self)
             new_item = Menu(menu)
-            new_item.add_command(label='ABOUT', command=callback)
-            new_item.add_command(label='GITHUB PAGE', command=callback2)
-            new_item.add_command(label='LIST OF COORDINATES', command=clicked3)
-            new_item.add_command(label='VERSION NUMBER', command=NOTIFICATION)
-            new_item.add_command(label='MODERN STYLE', command=OpenModernWindow)
-            new_item.add_command(label='SETTINGS', command=settings)
+            new_item.add_command(label='About', command=callback)
+            new_item.add_command(label='Github Page', command=callback2)
+            new_item.add_command(label='List Coordinates', command=clicked3)
+            new_item.add_command(label='Version Number', command=NOTIFICATION)
+            new_item.add_command(label='Modern Style', command=OpenModernWindow)
+            new_item.add_command(label='Settings', command=settings)
             new_item.add_separator()
-            new_item.add_command(label='START', command=self.do_conversion)
-            new_item.add_command(label='EXIT', command=self.EXITME)
+            new_item.add_command(label='Start', command=self.do_conversion)
+            new_item.add_command(label='Exit', command=self.EXITME)
             menu.add_cascade(label='Menu', menu=new_item)
             new_item2 = Menu(menu)
             new_item2.add_command(label='Tutorial', command=tutorial)
             new_item2.add_command(label='Contact', command=clicked)
             menu.add_cascade(label='Help', menu=new_item2)
             popup = Menu(self, tearoff=0)
-            popup.add_command(label="About", command=callback)  # , command=next) etc...
+            popup.add_command(label="About", command=callback) 
             popup.add_command(label='GitHub Page', command=callback2)
             popup.add_command(label='Auto Clicker Mega Spam', command=clicked2)
             popup.add_command(label='Version Number', command=NOTIFICATION)
             popup.add_command(label='Modern Style', command=OpenModernWindow)
             popup.add_command(label='Settings', command=settings)
             popup.add_command(label='List of coordinates', command=clicked3)
+            popup.add_command(label='Find Coordinates', command=Finder)
             popup.add_separator()
-            popup.add_command(label='START', command=self.do_conversion)
+            popup.add_command(label='Start', command=self.do_conversion)
             popup.add_command(label='Exit', command=self.EXITME)
 
             def do_popup(event):
@@ -542,8 +559,8 @@ def OldStyleGUI():
             tk.Label(self, text="Keyboard key to stop clicking:", background="#ebdbff").grid(row=1, column=2)
 
         def EXITME(self):
-            exit(0)  # crashed prog so it closes
-            # strtoint("crashmE!")
+            YourGUI.destroy(self)
+
 
         def do_conversion(self):
             y = self.inputY.get()
