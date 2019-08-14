@@ -1,6 +1,5 @@
 # What a Auto Clicker is?
 It spams clicks on the selected Coordinates, We also have a feature that allows for a list of coordinates to be performed and a mega auto clicker that is faster than the base version but is only limited by your computers specs.
-
 # Help / How to use the software
 Fist get the mouses X and Y coordinates by using the software linked below or the python script inside the Find Coordinates file inculed with the project.
 
@@ -20,6 +19,12 @@ pywin32
 
 [Download](https://pypi.org/project/pywin32/)
 
+
+win10toast
+
+[Download](https://pypi.org/project/win10toast/)
+
+
 # Contact info:
 
 EMAIL1: kai9987kai@Gmail.com
@@ -33,6 +38,7 @@ Website: [https://kai9987kai.github.io/AutoClicker.html](https://kai9987kai.gith
  
   [About page](https://kai9987kai.github.io/AutoClicker.html)
   
+
 # Set the program up how you what it to look
 
 style number 1 
