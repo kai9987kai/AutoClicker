@@ -3,7 +3,7 @@ It spams clicks on the selected Coordinates, We also have a feature that allows 
 # Help / How to use the software
 Fist get the mouses X and Y coordinates by using the software linked below or the python script inside the Find Coordinates file inculed with the project.
 
-[Downloads](http://www.adminsehow.com/wp-content/uploads/2012/03/MousePos.exe)
+
 
 # Python Modules Requirements:
 
