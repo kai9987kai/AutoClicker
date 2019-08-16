@@ -11,11 +11,13 @@ import os
 import sys
 
 
-
 def NOTIFICATION():
-    toaster = win10toast.ToastNotifier()
-    toaster.show_toast("AutoClicker", "V4.0", duration=5, threaded=True)
-    messagebox.showinfo('AutoClicker', 'V4.0')
+    try:
+        toaster = win10toast.ToastNotifier()
+        toaster.show_toast("AutoClicker", "V4.0", duration=5, threaded=True, icon_path ="favicon.ico")
+        messagebox.showinfo('AutoClicker', 'V4.0')
+    except:
+        pass
 
 
 def tutorial():
@@ -639,6 +641,5 @@ def OldStyleGUI():
         your_gui.configure(background="#ebdbff")
         your_gui.mainloop()
     time.sleep(0)
-
 
 MAINWINDOW_NEWSTYLE()
