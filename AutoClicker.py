@@ -21,7 +21,7 @@ def NOTIFICATION():
 def tutorial():
     window = Tk()
     window.title("Tutorial")
-    window.geometry('1010x50')
+    window.geometry('770x50')
     tab_control = ttk.Notebook(window)
     tab1 = ttk.Frame(tab_control)
     tab2 = ttk.Frame(tab_control)
@@ -31,7 +31,7 @@ def tutorial():
                  text='First get the coordinates, click on Find Coordinates the first number is the x coordinate and the second is the y coordinate.')
     lbl1.grid(column=0, row=0)
     lbl2 = Label(tab2,
-                 text='Input the X and Y coordinates into the X and Y entry boxes set a key as the stop key and press start you can use the stop key to stop the clicking')
+                 text='Input the X and Y coordinates into the X and Y entry boxes set a key as the stop key and press start you can use the stop key to stop the clicking.')
     lbl2.grid(column=0, row=0)
     tab_control.pack(expand=1, fill='both')
     try:
@@ -175,12 +175,25 @@ def MAINWINDOW_NEWSTYLE():
                 root.mainloop()
 
             def clicked():
-                os.startfile("AutoClickerContactPage.exe")
+                try:
+                    os.startfile("AutoClickerContactPage.exe")
+                except:
+                    messagebox.showerror("ERROR", "AutoClickerContactPage.exe is missing")
+                    pass
 
             def clicked2():
-                os.startfile("AutoClickerMegaSpam.exe")
+                try:
+                    os.startfile("AutoClickerMegaSpam.exe")
+                except:
+                    messagebox.showerror("Error", "AutoClickerMegaSpam.exe is missing")
+                    pass
             def Finder():
-                os.startfile("MousePos.exe")
+                try:
+                    os.startfile("MousePos.exe")
+                except:
+                    messagebox.showerror("ERROR", "MousePos.exe is missing")
+                    pass
+                
 
             ttk.Button(self, text="List Coordinates", command=clicked3).grid(row=4, column=2, sticky="ew")
             ttk.Button(self, text="Find Coordinates", command=Finder).grid(row=3, column=2, sticky="ew")
@@ -258,6 +271,7 @@ def MAINWINDOW_NEWSTYLE():
             new_item.add_command(label='Old Style GUI', command=OpenOldWindow)
             new_item.add_command(label='Settings', command=settings)
             new_item.add_command(label='List of Coordinates', command=clicked3)
+            new_item.add_command(label='Coordinates Finder', command=Finder)
             new_item.add_separator()
             new_item.add_command(label='Start', command=self.do_conversion)
             new_item.add_command(label='Exit', command=self.EXITME)
@@ -461,7 +475,11 @@ def OldStyleGUI():
                 root.attributes("-topmost", True)
                 root.mainloop()
             def Finder():
-                os.startfile("MousePos.exe")
+                try:
+                    os.startfile("MousePos.exe")
+                except:
+                    messagebox.showerror("ERROR", "MousePos.exe is missing")
+                    pass
 
             tk.Button(self, text="List Coordinates", command=clicked3).grid(row=4, column=2,sticky="ew")
             tk.Button(self, text="Find Coordinates", command=Finder).grid(row=3, column=2, sticky="ew")
@@ -534,7 +552,11 @@ def OldStyleGUI():
                 MAINWINDOW_NEWSTYLE()
 
             def clicked2():
-                os.startfile("AutoClickerMegaSpam.exe")
+                try:
+                    os.startfile("AutoClickerMegaSpam.exe")
+                except:
+                    messagebox.showerror("Error", "AutoClickerMegaSpam.exe is missing")
+                    pass
 
             # Menu Bar!! ⬇
             menu = Menu(self)
@@ -544,6 +566,8 @@ def OldStyleGUI():
             new_item.add_command(label='List Coordinates', command=clicked3)
             new_item.add_command(label='Version Number', command=NOTIFICATION)
             new_item.add_command(label='Modern Style', command=OpenModernWindow)
+            new_item.add_command(label='Auto Clicker Mega Spam', command=clicked2)
+            new_item.add_command(label='Coordinates Finder', command=Finder)
             new_item.add_command(label='Settings', command=settings)
             new_item.add_separator()
             new_item.add_command(label='Start', command=self.do_conversion)
