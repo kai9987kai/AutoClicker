@@ -18,7 +18,6 @@ def NOTIFICATION():
     messagebox.showinfo('AutoClicker', 'V4.0')
 
 
-
 def tutorial():
     window = Tk()
     window.title("Tutorial")
@@ -35,7 +34,12 @@ def tutorial():
                  text='Input the X and Y coordinates into the X and Y entry boxes set a key as the stop key and press start you can use the stop key to stop the clicking')
     lbl2.grid(column=0, row=0)
     tab_control.pack(expand=1, fill='both')
-    window.iconbitmap('favicon.ico')
+    try:
+        window.iconbitmap('favicon.ico')
+    except:
+        pass
+    
+    
     window.attributes("-topmost", True)
     window.resizable(False, False)
     window.geometry("+300+300")
@@ -117,7 +121,10 @@ def MAINWINDOW_NEWSTYLE():
                 y.place(x=350, y=170)
                 y_txt.set('')
                 root.title("AutoClicker - list of coordinates")
-                root.iconbitmap('favicon.ico')
+                try:
+                    root.iconbitmap('favicon.ico')
+                except:
+                    pass
                 root.resizable(False, False)
                 root.attributes("-topmost", True)
 
@@ -182,7 +189,10 @@ def MAINWINDOW_NEWSTYLE():
                 window = Tk()
                 window.title("Settings")
                 window.geometry('259x94')
-                window.iconbitmap('favicon.ico')
+                try:
+                    window.iconbitmap('favicon.ico')
+                except:
+                    pass
                 window.resizable(False, False)
                 window.geometry("+0+0")
                 window.attributes("-topmost", True)
@@ -300,7 +310,7 @@ def MAINWINDOW_NEWSTYLE():
                 y = int(y)
             except:
                 messagebox.showerror('Invalid point', 'Invalid point')
-                exit(0)
+                YourGUI.destroy(self)
                 # strtoint("crashmE!")
             while running:
                 pyautogui.click(x, y)
@@ -315,7 +325,10 @@ def MAINWINDOW_NEWSTYLE():
         your_gui.geometry("+300+300")
         your_gui.attributes("-topmost", True)
         your_gui.title('AutoClicker')  # Set title
-        your_gui.iconbitmap('favicon.ico')  # Set icon
+        try:
+            your_gui.iconbitmap('favicon.ico')
+        except:
+            pass
         your_gui.resizable(False, False)
         your_gui.configure(background="#ebdbff")
         your_gui.mainloop()
@@ -439,7 +452,11 @@ def OldStyleGUI():
                 root.bind("<Button-3>", do_popup)
 
                 root.title("AutoClicker - list of coordinates")
-                root.iconbitmap('favicon.ico')
+                try:
+                    root.iconbitmap('favicon.ico')
+                
+                except:
+                    pass
                 root.resizable(False, False)
                 root.attributes("-topmost", True)
                 root.mainloop()
@@ -456,7 +473,10 @@ def OldStyleGUI():
                 window = Tk()
                 window.title("Settings")
                 window.geometry('259x94')
-                window.iconbitmap('favicon.ico')
+                try:
+                    window.iconbitmap('favicon.ico')
+                except:
+                    pass
                 window.resizable(False, False)
                 window.geometry("+0+0")
                 window.attributes("-topmost", True)
@@ -572,7 +592,7 @@ def OldStyleGUI():
                 y = int(y)
             except:
                 messagebox.showerror('Invalid point', 'Invalid point')
-                exit(0)
+                YourGUI.destroy(self)
                 # strtoint("crashmE!")
             while running:
                 pyautogui.click(x, y)
@@ -587,7 +607,10 @@ def OldStyleGUI():
         your_gui.geometry("+300+300")
         your_gui.attributes("-topmost", True)
         your_gui.title('AutoClicker')  # Set title
-        your_gui.iconbitmap('favicon.ico')  # Set icon
+        try:
+            your_gui.iconbitmap('favicon.ico')
+        except:
+            pass
         your_gui.resizable(False, False)
         your_gui.configure(background="#ebdbff")
         your_gui.mainloop()
