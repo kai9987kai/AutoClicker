@@ -61,6 +61,26 @@ def MAINWINDOW_NEWSTYLE():
             ttk.Label(self, text="ENTER Y:", background="#ebdbff", anchor=E).grid(row=0, column=2)
             self.inputX = ttk.Entry(self)
             self.inputX.grid(row=0, column=1)
+            
+            self.cmb = ttk.Combobox(self, width="10", values=("Left Click","Right Click"))
+            
+            class TableDropDown(ttk.Combobox):
+                def __init__(self, parent):
+                    
+                    self.current_table = tk.StringVar() # create variable for table
+                    ttk.Combobox.__init__(self, parent)#  init widget
+                    self.config(textvariable = self.current_table, state = "readonly", values = ["Customers", "Pets", "Invoices", "Prices"])
+                    self.current(0) # index of values for current table
+                    self.place(x = 50, y = 50, anchor = "w") # place drop down box
+
+            ttk.Label(self, text="""Choose the left or
+right mouse button""", background="#ebdbff", anchor=E).grid(row=1, column=0)
+            self.cmb.grid(row=1, column=1, sticky="ew")
+
+
+
+            
+    
             # Enter Y field and label ⬇
             tk.Label(self, text="ENTER X:", background="#ebdbff").grid(row=0, column=0)
             self.inputY = ttk.Entry(self)
@@ -312,26 +332,57 @@ def MAINWINDOW_NEWSTYLE():
             YourGUI.destroy(self)
 
         def do_conversion(self):
-            y = self.inputY.get()
-            x = self.inputX.get()
+            if self.cmb.get() == "Left Click":
+                y = self.inputY.get()
+                x = self.inputX.get()
+                    
+                running = True
+                try:
+                    
+                    x = int(x)
+                    y = int(y)
+                except:
+                    
+                    messagebox.showerror('Invalid point', 'Invalid point')
+                    YourGUI.destroy(self)
+                    # strtoint("crashmE!")
+                while running:
+                    pyautogui.FAILSAFE = False # disables the fail-safe
+                    pyautogui.click(x, y)
+                    
+                    if keyboard.is_pressed(self.inputhotkey.get()):
+                        break
+            elif self.cmb.get() == "Right Click":
+                
+                y = self.inputY.get()
+                x = self.inputX.get()
+                running = True
+                try:
+                    
+                    x = int(x)
+                    y = int(y)
+                except:
+
+                    messagebox.showerror('Invalid point', 'Invalid point')
+                    YourGUI.destroy(self)
+                    # strtoint("crashmE!")
+                        
+                while running:
+                    pyautogui.FAILSAFE = False # disables the fail-safe
+                    pyautogui.click(button='right')
+                    pyautogui.click(x, y)
+                     
+                    
+                    if keyboard.is_pressed(self.inputhotkey.get()):
+                        break
+                    
+            
 
             def action():
                 YourGUI.destroy()
 
 
 
-            running = True
-            try:
-                x = int(x)
-                y = int(y)
-            except:
-                messagebox.showerror('Invalid point', 'Invalid point')
-                YourGUI.destroy(self)
-                # strtoint("crashmE!")
-            while running:
-                pyautogui.click(x, y)
-                if keyboard.is_pressed(self.inputhotkey.get()):
-                    break
 
         def do_hotkey(self):
             hotkey = self.inputhotkey.get()
