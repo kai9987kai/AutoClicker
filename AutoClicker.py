@@ -10,7 +10,7 @@ from tkinter import ttk
 import os
 import sys
 try:
-    import win10toast
+    import win10toast #This module only works on windows
 except:
     pass
 ################################################################################
