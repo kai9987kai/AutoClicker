@@ -1,4 +1,3 @@
-
 import pyautogui
 import time
 import tkinter as tk
@@ -9,6 +8,8 @@ import keyboard
 from tkinter import ttk
 import os
 import sys
+import datetime
+import threading
 try:
     import win10toast #This module only works on windows
 except:
@@ -64,10 +65,21 @@ class Coordinates():
 def MAINWINDOW_NEWSTYLE():
     class YourGUI(tk.Tk):
         def __init__(self):
-            # inherit tkinter's window methods
             tk.Tk.__init__(self)
-            # Enter X field and label ⬇
             ttk.Label(self, text="ENTER Y:", background="#ebdbff", anchor=E).grid(row=0, column=2)
+            ttk.Label(self, text="Delay Between clicks", background="#ebdbff", anchor=E).grid(row=5, column=0)
+            self.inputdelayentry = tk.StringVar()
+
+
+            
+            self.inputdelayentry.set("0")
+        
+            
+            self.inputdelay = ttk.Entry(self, textvariable= self.inputdelayentry).grid(row=5, column=1)
+            
+             
+            
+            
             self.inputX = ttk.Entry(self)
             self.inputX.grid(row=0, column=1)
             
@@ -91,17 +103,17 @@ right mouse button""", background="#ebdbff", anchor=E).grid(row=1, column=0)
 
             
     
-            # Enter Y field and label ⬇
+            
             tk.Label(self, text="ENTER X:", background="#ebdbff").grid(row=0, column=0)
             self.inputY = ttk.Entry(self)
             self.inputY.grid(row=0, column=3)
             # Start Button ⬇
-            ttk.Button(self, text="start", command=self.do_conversion).grid(row=3, column=0, columnspan=2)
+            ttk.Button(self, text="start", command=self.startclick).grid(row=6, column=0)
             # close button ⬇
-            ttk.Button(self, text="exit!", command=self.EXITME).grid(row=4, column=0, columnspan=2)
+            ttk.Button(self, text="exit!", command=self.EXITME).grid(row=7, column=0)
             self.inputhotkey = ttk.Entry(self)
             self.inputhotkey.grid(row=1, column=3, columnspan=1)
-            ttk.Button(self, text="   SET   ", command=self.do_hotkey).grid(row=3, column=3, columnspan=4)
+
 
             def callback():
                 webbrowser.open_new(r"https://kai9987kai.github.io/AutoClicker.html")
@@ -109,7 +121,7 @@ right mouse button""", background="#ebdbff", anchor=E).grid(row=1, column=0)
             def callback2():
                 webbrowser.open_new(r"https://github.com/kai9987kai/AutoClicker")
 
-            ttk.Button(self, text="ABOUT", command=callback).grid(row=4, column=3)
+            ttk.Button(self, text="ABOUT", command=callback).grid(row=5, column=3, sticky="ew")
 
             def clicked3():
                 your_gui.destroy()
@@ -227,8 +239,8 @@ right mouse button""", background="#ebdbff", anchor=E).grid(row=1, column=0)
                     pass
                 
 
-            ttk.Button(self, text="List Coordinates", command=clicked3).grid(row=4, column=2, sticky="ew")
-            ttk.Button(self, text="Find Coordinates", command=Finder).grid(row=3, column=2, sticky="ew")
+            ttk.Button(self, text="List Coordinates", command=clicked3).grid(row=7, column=3, sticky="ew")
+            ttk.Button(self, text="Find Coordinates", command=Finder).grid(row=6, column=3, sticky="ew")
 
             def settings():
                 window = Tk()
@@ -341,8 +353,15 @@ right mouse button""", background="#ebdbff", anchor=E).grid(row=1, column=0)
         def EXITME(self):
             YourGUI.destroy(self)
 
+        def startclick(self):
+            
+            x1 = threading.Thread(target=self.do_conversion, daemon=True)
+            x1.start()   
         def do_conversion(self):
+
+     
             if self.cmb.get() == "Left Click":
+                
                 y = self.inputY.get()
                 x = self.inputX.get()
                     
@@ -355,13 +374,24 @@ right mouse button""", background="#ebdbff", anchor=E).grid(row=1, column=0)
                     
                     messagebox.showerror('Invalid point', 'Invalid point')
                     YourGUI.destroy(self)
-                    # strtoint("crashmE!")
                 while running:
-                    pyautogui.FAILSAFE = False # disables the fail-safe
+                    pyautogui.FAILSAFE = False
                     pyautogui.click(x, y)
                     
                     if keyboard.is_pressed(self.inputhotkey.get()):
-                        break
+                        running = False
+                        
+                    
+                    
+                    num= int(self.inputdelayentry.get())
+                    start_time = datetime.datetime.now()
+                    while (datetime.datetime.now() - start_time).total_seconds() < num:
+                        
+                        if keyboard.is_pressed(self.inputhotkey.get()):
+                            exit(0)
+                        else:
+                            pass
+                                
             elif self.cmb.get() == "Right Click":
                 
                 y = self.inputY.get()
@@ -375,13 +405,24 @@ right mouse button""", background="#ebdbff", anchor=E).grid(row=1, column=0)
 
                     messagebox.showerror('Invalid point', 'Invalid point')
                     YourGUI.destroy(self)
-                    # strtoint("crashmE!")
                         
                 while running:
                     pyautogui.FAILSAFE = False # disables the fail-safe
                     pyautogui.click(button='right')
                     pyautogui.click(x, y)
-                     
+                    time.sleep(int(self.inputdelayentry.get()))
+                               
+
+            
+                    num= int(self.inputdelayentry.get())
+                    start_time = datetime.datetime.now()
+                    while (datetime.datetime.now() - start_time).total_seconds() < num:
+                        
+                        if keyboard.is_pressed(self.inputhotkey.get()):
+                            exit(0)
+                        else:
+                            pass
+                    
                     
                     if keyboard.is_pressed(self.inputhotkey.get()):
                         break
@@ -392,7 +433,8 @@ right mouse button""", background="#ebdbff", anchor=E).grid(row=1, column=0)
                 YourGUI.destroy()
 
 
-
+        def getdelay(self):
+            tx = self.getinputdelayentry.get()
 
         def do_hotkey(self):
             hotkey = self.inputhotkey.get()
@@ -412,6 +454,8 @@ right mouse button""", background="#ebdbff", anchor=E).grid(row=1, column=0)
     time.sleep(0)
 
 
+x = threading.Thread(target=MAINWINDOW_NEWSTYLE, daemon=True)
+x.start()
 def OldStyleGUI():
     class YourGUI(tk.Tk):
         def __init__(self):
@@ -751,4 +795,4 @@ right mouse button""", background="#ebdbff", anchor=E).grid(row=1, column=0)
         your_gui.mainloop()
     time.sleep(0)
 
-MAINWINDOW_NEWSTYLE()
+
