@@ -112,6 +112,7 @@ Partial Class Form1
         Me.FormBorderStyle = System.Windows.Forms.FormBorderStyle.FixedToolWindow
         Me.Icon = CType(resources.GetObject("$this.Icon"), System.Drawing.Icon)
         Me.Name = "Form1"
+        Me.ShowInTaskbar = False
         Me.Text = "Auto Clicker - Contact"
         Me.ResumeLayout(False)
         Me.PerformLayout()

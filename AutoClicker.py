@@ -25,32 +25,37 @@ except:
 def NOTIFICATION():
     try:
         toaster = win10toast.ToastNotifier()
-        toaster.show_toast("AutoClicker", "V4.0", duration=5, threaded=True, icon_path ="favicon.ico")
-        messagebox.showinfo('AutoClicker', 'V4.0')
+        toaster.show_toast("AutoClicker", "V5.0", duration=5, threaded=True, icon_path ="favicon.ico")
+        messagebox.showinfo('AutoClicker', 'V5.0')
     except:
         pass
 
   
 def tutorial():
-    window = Tk()
-    window.title("Tutorial")
-    window.geometry('770x50')
-    tab_control = ttk.Notebook(window)
-    tab1 = ttk.Frame(tab_control)
-    tab2 = ttk.Frame(tab_control)
-    tab_control.add(tab1, text='First Step')
-    tab_control.add(tab2, text='Second Step')
-    lbl1 = Label(tab1, anchor=W,
-                 text='First get the coordinates, click on Find Coordinates the first number is the x coordinate and the second is the y coordinate.')
-    lbl1.grid(column=0, row=0)
-    lbl2 = Label(tab2,
-                 text='Input the X and Y coordinates into the X and Y entry boxes set a key as the stop key and press start you can use the stop key to stop the clicking.')
-    lbl2.grid(column=0, row=0)
-    tab_control.pack(expand=1, fill='both')
-    try:
-        window.iconbitmap('favicon.ico')
+    try:    
+        os.startfile("AutoClickerHelpPage.exe")
     except:
-        pass
+        
+        window = Tk()
+        window.title("Tutorial")
+        window.geometry('770x50')
+        tab_control = ttk.Notebook(window)
+        tab1 = ttk.Frame(tab_control)
+        tab2 = ttk.Frame(tab_control)
+        tab_control.add(tab1, text='First Step')
+        tab_control.add(tab2, text='Second Step')
+        lbl1 = Label(tab1, anchor=W,
+                 text='First get the coordinates, click on Find Coordinates the first number is the x coordinate and the second is the y coordinate.')
+        lbl1.grid(column=0, row=0)
+        lbl2 = Label(tab2,
+                 text='Input the X and Y coordinates into the X and Y entry boxes set a key as the stop key and press start you can use the stop key to stop the clicking.')
+        lbl2.grid(column=0, row=0)
+        tab_control.pack(expand=1, fill='both')
+        try:
+            
+            window.iconbitmap('favicon.ico')
+        except:
+            pass
     
     
     window.attributes("-topmost", True)
@@ -67,8 +72,8 @@ def MAINWINDOW_NEWSTYLE():
     class YourGUI(tk.Tk):
         def __init__(self):
             tk.Tk.__init__(self)
-            ttk.Label(self, text="ENTER Y:", background="#ebdbff", anchor=E).grid(row=0, column=2)
-            ttk.Label(self, text="Delay Between clicks", background="#ebdbff", anchor=E).grid(row=5, column=0)
+            ttk.Label(self, text="ENTER Y:", background="#e7dff2", anchor=E).grid(row=0, column=2)
+            ttk.Label(self, text="Delay Between clicks", background="#e7dff2", anchor=E).grid(row=5, column=0)
             self.inputdelayentry = tk.StringVar()
 
 
@@ -96,7 +101,7 @@ def MAINWINDOW_NEWSTYLE():
                     self.place(x = 50, y = 50, anchor = "w") # place drop down box
 
             ttk.Label(self, text="""Choose the left or
-right mouse button""", background="#ebdbff", anchor=E).grid(row=1, column=0)
+right mouse button""", background="#e7dff2", anchor=E).grid(row=1, column=0)
             self.cmb.grid(row=1, column=1, sticky="ew")
             self.cmb.current(0)
 
@@ -165,6 +170,14 @@ right mouse button""", background="#ebdbff", anchor=E).grid(row=1, column=0)
                 y = ttk.Entry(root, textvariable=y_txt)
                 y.place(x=350, y=170)
                 y_txt.set('')
+
+
+            
+                cmb = ttk.Combobox(root, width="10", values=("Left Click","Right Click"))
+                ttk.Label(root, text="""Select whether to right or
+left click the list""", anchor=E).place(x=350, y=200)
+                cmb.place(x=350, y=235)
+                cmb.current(0)
                 root.title("AutoClicker - list of coordinates")
                 try:
                     root.iconbitmap('favicon.ico')
@@ -183,16 +196,33 @@ right mouse button""", background="#ebdbff", anchor=E).grid(row=1, column=0)
                         list_box.insert(END, things[i])
 
                 def run_list():
+                    
                     x_cords = [item[0] for item in things]
                     y_cords = [item[1] for item in things]
 
                     for i in range(len(things)):
-                        screenWidth, screenHeight = pyautogui.size()
-                        currentMouseX, currentMouseY = pyautogui.position()
-                        pyautogui.moveTo(int(x_cords[i]), int(y_cords[i]))
-                        # print("Gonna Click",x_cords[i],y_cords[i])
-                        pyautogui.click()
+                        
+                        if cmb.get() == "Left Click":
+                            screenWidth, screenHeight = pyautogui.size()
+                            currentMouseX, currentMouseY = pyautogui.position()
+                            pyautogui.moveTo(int(x_cords[i]), int(y_cords[i]))
+                            # print("Gonna Click",x_cords[i],y_cords[i])
+                            pyautogui.click()
 
+
+                        elif cmb.get() == "Right Click":
+                            
+                            screenWidth, screenHeight = pyautogui.size()
+                            currentMouseX, currentMouseY = pyautogui.position()
+                            pyautogui.moveTo(int(x_cords[i]), int(y_cords[i]))
+                            # print("Gonna Click",x_cords[i],y_cords[i])
+                            pyautogui.click(button='right')
+                            pyautogui.click()
+
+
+                        
+                        
+            
                 def delete(listbox):
                     global things
                     # Delete from Listbox
@@ -327,7 +357,7 @@ right mouse button""", background="#ebdbff", anchor=E).grid(row=1, column=0)
             menu.add_cascade(label='Help', menu=new_item2)
             new_item2.add_command(label='Contact', command=clicked)
             self.config(menu=menu)
-            tk.Label(self, text="Keyboard key to stop clicking:", background="#ebdbff").grid(row=1, column=2)
+            tk.Label(self, text="Keyboard key to stop clicking:", background="#e7dff2").grid(row=1, column=2)
             popup = Menu(self, tearoff=0)
             popup.add_command(label="About", command=callback)  # , command=next) etc...
             popup.add_command(label='GitHub Page', command=callback2)
@@ -450,7 +480,7 @@ right mouse button""", background="#ebdbff", anchor=E).grid(row=1, column=0)
         except:
             pass
         your_gui.resizable(False, False)
-        your_gui.configure(background="#ebdbff")
+        your_gui.configure(background="#e7dff2")
         your_gui.mainloop()
     time.sleep(0)
 
@@ -463,16 +493,16 @@ def OldStyleGUI():
             # inherit tkinter's window methods
             tk.Tk.__init__(self)
 
-            tk.Label(self, text="ENTER Y:", background="#ebdbff").grid(row=0, column=2)
+            tk.Label(self, text="ENTER Y:", background="#e7dff2").grid(row=0, column=2)
             self.inputX = tk.Entry(self)
             self.inputX.grid(row=0, column=1)
 
-            tk.Label(self, text="ENTER X:", background="#ebdbff").grid(row=0, column=0)
+            tk.Label(self, text="ENTER X:", background="#e7dff2").grid(row=0, column=0)
             self.inputY = tk.Entry(self)
             self.inputY.grid(row=0, column=3)
             
             self.cmb = ttk.Combobox(self, width="10", values=("Left Click","Right Click"))
-            ttk.Label(self, text="Delay Between clicks", background="#ebdbff", anchor=E).grid(row=5, column=0)
+            ttk.Label(self, text="Delay Between clicks", background="#e7dff2", anchor=E).grid(row=5, column=0)
             self.inputdelayentry = tk.StringVar()
 
 
@@ -492,7 +522,7 @@ def OldStyleGUI():
                     self.place(x = 50, y = 50, anchor = "w") # place drop down box
 
             ttk.Label(self, text="""Choose the left or
-right mouse button""", background="#ebdbff", anchor=E).grid(row=1, column=0)
+right mouse button""", background="#e7dff2", anchor=E).grid(row=1, column=0)
             self.cmb.grid(row=1, column=1, sticky="ew")
             self.cmb.current(0)
 
@@ -557,6 +587,12 @@ right mouse button""", background="#ebdbff", anchor=E).grid(row=1, column=0)
                 y.place(x=350, y=170)
                 y_txt.set('')
 
+                cmb = ttk.Combobox(root, width="10", values=("Left Click","Right Click"))
+                ttk.Label(root, text="""Select whether to right or
+left click the list""", anchor=E).place(x=350, y=200)
+                cmb.place(x=350, y=235)
+                cmb.current(0)
+
                 def add():
                     content_x = x_txt.get()
                     content_y = y_txt.get()
@@ -571,11 +607,22 @@ right mouse button""", background="#ebdbff", anchor=E).grid(row=1, column=0)
                     y_cords = [item[1] for item in things]
 
                     for i in range(len(things)):
-                        screenWidth, screenHeight = pyautogui.size()
-                        currentMouseX, currentMouseY = pyautogui.position()
-                        pyautogui.moveTo(int(x_cords[i]), int(y_cords[i]))
-                        # print("Gonna Click",x_cords[i],y_cords[i])
-                        pyautogui.click()
+                        if cmb.get() == "Left Click":
+                            screenWidth, screenHeight = pyautogui.size()
+                            currentMouseX, currentMouseY = pyautogui.position()
+                            pyautogui.moveTo(int(x_cords[i]), int(y_cords[i]))
+                            # print("Gonna Click",x_cords[i],y_cords[i])
+                            pyautogui.click()
+
+
+                        elif cmb.get() == "Right Click":
+                            screenWidth, screenHeight = pyautogui.size()
+                            currentMouseX, currentMouseY = pyautogui.position()
+                            pyautogui.moveTo(int(x_cords[i]), int(y_cords[i]))
+                            # print("Gonna Click",x_cords[i],y_cords[i])
+                            pyautogui.click(button='right')
+                            pyautogui.click()
+
 
                 def delete(listbox):
                     global things
@@ -736,7 +783,7 @@ right mouse button""", background="#ebdbff", anchor=E).grid(row=1, column=0)
 
             self.bind("<Button-3>", do_popup)
             self.config(menu=menu)
-            tk.Label(self, text="Keyboard key to stop clicking:", background="#ebdbff").grid(row=1, column=2)
+            tk.Label(self, text="Keyboard key to stop clicking:", background="#e7dff2").grid(row=1, column=2)
 
         def EXITME(self):
             YourGUI.destroy(self)
@@ -819,7 +866,7 @@ right mouse button""", background="#ebdbff", anchor=E).grid(row=1, column=0)
         except:
             pass
         your_gui.resizable(False, False)
-        your_gui.configure(background="#ebdbff")
+        your_gui.configure(background="#e7dff2")
         your_gui.mainloop()
     time.sleep(0)
 
