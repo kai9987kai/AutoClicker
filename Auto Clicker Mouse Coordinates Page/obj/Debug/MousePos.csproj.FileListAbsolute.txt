@@ -1,0 +1,18 @@
+C:\Users\test\Desktop\remote\MousePos\bin\Debug\WindowsFormsApplication4.exe
+C:\Users\test\Desktop\remote\MousePos\bin\Debug\WindowsFormsApplication4.pdb
+C:\Users\test\Desktop\remote\MousePos\obj\Debug\MousePos.csprojAssemblyReference.cache
+C:\Users\test\Desktop\remote\MousePos\obj\Debug\WindowsFormsApplication4.Form1.resources
+C:\Users\test\Desktop\remote\MousePos\obj\Debug\WindowsFormsApplication4.Properties.Resources.resources
+C:\Users\test\Desktop\remote\MousePos\obj\Debug\MousePos.csproj.GenerateResource.cache
+C:\Users\test\Desktop\remote\MousePos\obj\Debug\MousePos.csproj.CoreCompileInputs.cache
+C:\Users\test\Desktop\remote\MousePos\obj\Debug\WindowsFormsApplication4.exe
+C:\Users\test\Desktop\remote\MousePos\obj\Debug\WindowsFormsApplication4.pdb
+C:\Users\test\Documents\GitHub\AutoClicker\Auto Clicker Mouse Coordinates Page\bin\Debug\Auto Clicker Mouse Coordinates Page.exe
+C:\Users\test\Documents\GitHub\AutoClicker\Auto Clicker Mouse Coordinates Page\bin\Debug\Auto Clicker Mouse Coordinates Page.pdb
+C:\Users\test\Documents\GitHub\AutoClicker\Auto Clicker Mouse Coordinates Page\obj\Debug\MousePos.csprojAssemblyReference.cache
+C:\Users\test\Documents\GitHub\AutoClicker\Auto Clicker Mouse Coordinates Page\obj\Debug\AutoClickerMouseCoordinatesPage.Form1.resources
+C:\Users\test\Documents\GitHub\AutoClicker\Auto Clicker Mouse Coordinates Page\obj\Debug\AutoClickerMouseCoordinatesPage.Properties.Resources.resources
+C:\Users\test\Documents\GitHub\AutoClicker\Auto Clicker Mouse Coordinates Page\obj\Debug\MousePos.csproj.GenerateResource.cache
+C:\Users\test\Documents\GitHub\AutoClicker\Auto Clicker Mouse Coordinates Page\obj\Debug\MousePos.csproj.CoreCompileInputs.cache
+C:\Users\test\Documents\GitHub\AutoClicker\Auto Clicker Mouse Coordinates Page\obj\Debug\Auto Clicker Mouse Coordinates Page.exe
+C:\Users\test\Documents\GitHub\AutoClicker\Auto Clicker Mouse Coordinates Page\obj\Debug\Auto Clicker Mouse Coordinates Page.pdb

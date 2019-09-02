@@ -264,9 +264,9 @@ left click the list""", anchor=E).place(x=350, y=200)
                     pass
             def Finder():
                 try:
-                    os.startfile("MousePos.exe")
+                    os.startfile("AutoClickerMouseCoordinatesPage.exe")
                 except:
-                    messagebox.showerror("ERROR", "MousePos.exe is missing")
+                    messagebox.showerror("ERROR", "AutoClickerMouseCoordinatesPage.exe is missing")
                     pass
                 
 
@@ -659,9 +659,9 @@ left click the list""", anchor=E).place(x=350, y=200)
                 root.mainloop()
             def Finder():
                 try:
-                    os.startfile("MousePos.exe")
+                    os.startfile("AutoClickerMouseCoordinatesPage.exe")
                 except:
-                    messagebox.showerror("ERROR", "MousePos.exe is missing")
+                    messagebox.showerror("ERROR", "AutoClickerMouseCoordinatesPage.exe is missing")
                     pass
 
             tk.Button(self, text="List Coordinates", command=clicked3).grid(row=7, column=3,sticky="ew")
