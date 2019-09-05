@@ -13,3 +13,18 @@ C:\Users\test\source\repos\Auto clicker - help\Auto clicker - help\obj\Debug\Aut
 C:\Users\test\source\repos\Auto clicker - help\Auto clicker - help\obj\Debug\Auto clicker - help.csproj.CoreCompileInputs.cache
 C:\Users\test\source\repos\Auto clicker - help\Auto clicker - help\obj\Debug\Auto clicker - help.exe
 C:\Users\test\source\repos\Auto clicker - help\Auto clicker - help\obj\Debug\Auto clicker - help.pdb
+C:\Users\test\Documents\GitHub\AutoClicker\Auto clicker Help Page\Auto clicker - help\bin\Debug\Auto clicker - help.exe.config
+C:\Users\test\Documents\GitHub\AutoClicker\Auto clicker Help Page\Auto clicker - help\bin\Debug\Auto clicker - help.exe
+C:\Users\test\Documents\GitHub\AutoClicker\Auto clicker Help Page\Auto clicker - help\bin\Debug\Auto clicker - help.pdb
+C:\Users\test\Documents\GitHub\AutoClicker\Auto clicker Help Page\Auto clicker - help\obj\Debug\Auto clicker - help.csprojAssemblyReference.cache
+C:\Users\test\Documents\GitHub\AutoClicker\Auto clicker Help Page\Auto clicker - help\obj\Debug\MainWindow.g.cs
+C:\Users\test\Documents\GitHub\AutoClicker\Auto clicker Help Page\Auto clicker - help\obj\Debug\App.g.cs
+C:\Users\test\Documents\GitHub\AutoClicker\Auto clicker Help Page\Auto clicker - help\obj\Debug\Auto clicker - help_MarkupCompile.cache
+C:\Users\test\Documents\GitHub\AutoClicker\Auto clicker Help Page\Auto clicker - help\obj\Debug\Auto clicker - help_MarkupCompile.lref
+C:\Users\test\Documents\GitHub\AutoClicker\Auto clicker Help Page\Auto clicker - help\obj\Debug\MainWindow.baml
+C:\Users\test\Documents\GitHub\AutoClicker\Auto clicker Help Page\Auto clicker - help\obj\Debug\Auto clicker - help.g.resources
+C:\Users\test\Documents\GitHub\AutoClicker\Auto clicker Help Page\Auto clicker - help\obj\Debug\Auto_clicker___help.Properties.Resources.resources
+C:\Users\test\Documents\GitHub\AutoClicker\Auto clicker Help Page\Auto clicker - help\obj\Debug\Auto clicker - help.csproj.GenerateResource.cache
+C:\Users\test\Documents\GitHub\AutoClicker\Auto clicker Help Page\Auto clicker - help\obj\Debug\Auto clicker - help.csproj.CoreCompileInputs.cache
+C:\Users\test\Documents\GitHub\AutoClicker\Auto clicker Help Page\Auto clicker - help\obj\Debug\Auto clicker - help.exe
+C:\Users\test\Documents\GitHub\AutoClicker\Auto clicker Help Page\Auto clicker - help\obj\Debug\Auto clicker - help.pdb

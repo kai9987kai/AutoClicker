@@ -15,8 +15,9 @@
         <TextBlock HorizontalAlignment="Left" Margin="10,104,0,0" TextWrapping="Wrap" VerticalAlignment="Top" FontSize="14" Height="70" Width="218"><Run Text="2nd A window with 2 numbers on will open note down the numb"/><Run Text="ers or leave the window open"/></TextBlock>
         <TextBlock HorizontalAlignment="Left" Margin="10,179,0,0" TextWrapping="Wrap" VerticalAlignment="Top" FontSize="14" Height="70" Width="343"><Run Text="3rd Put the 1st number in the enter x field and the second the 2nd number in the"/><Run Text=" y"/><Run Text=" entry field"/></TextBlock>
         <TextBlock HorizontalAlignment="Left" Margin="10,234,0,0" TextWrapping="Wrap" VerticalAlignment="Top" FontSize="14" Height="103" Width="343" Text="4th To finish up select whether you want it to spam left clicks or right clicks. To make sure you don't get stuck clicking enter a failsafe key in the field called 'Keyboard key to stop clicking' if you forget to do this then press ctrl + alt + delete at the same time then select log off"/>
-        <TextBlock HorizontalAlignment="Left" Margin="10,342,0,0" TextWrapping="Wrap" VerticalAlignment="Top" FontSize="14" Height="103" Width="343" Text="5th Press start button after that use your custom failsafe key  to stop clicking" Grid.RowSpan="2"/>
-        <Image Margin="233,104,57,220" Source="mous.PNG" Stretch="Fill"/>
+        <TextBlock HorizontalAlignment="Left" Margin="10,337,0,0" TextWrapping="Wrap" VerticalAlignment="Top" FontSize="14" Height="37" Width="319"><Run Text="5th Press start button after that use your custom failsafe key  to stop clicking"/></TextBlock>
         <Image Margin="10,71,222,255" Source="go.PNG" Stretch="Fill"/>
+        <Button Content="Close" HorizontalAlignment="Left" Margin="259,358,0,0" VerticalAlignment="Top" Width="94" Click="Button_Click" Height="21"/>
+        <Image Margin="233,104,44,220" Source="finder.PNG" Stretch="Fill"/>
     </Grid>
 </Window>

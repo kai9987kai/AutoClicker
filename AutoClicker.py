@@ -868,6 +868,5 @@ left click the list""", anchor=E).place(x=350, y=200)
         your_gui.resizable(False, False)
         your_gui.configure(background="#e7dff2")
         your_gui.mainloop()
-    time.sleep(0)
 
 
