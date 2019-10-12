@@ -89,7 +89,7 @@ def MAINWINDOW_NEWSTYLE():
             self.inputX = ttk.Entry(self)
             self.inputX.grid(row=0, column=1)
             
-            self.cmb = ttk.Combobox(self, width="10", values=("Left Click","Right Click","Middle Click","Double Right Click","Double Left Click","Double Middle Click"))
+            self.cmb = ttk.Combobox(self, width="15", values=("Left Click","Right Click","Middle Click","Double Right Click","Double Left Click","Double Middle Click"))
             
             class TableDropDown(ttk.Combobox):
                 def __init__(self, parent):
@@ -173,7 +173,7 @@ right mouse button""", background="#e7dff2", anchor=E).grid(row=1, column=0)
 
 
             
-                cmb = ttk.Combobox(root, width="10", values=("Left Click","Right Click"))
+                cmb = ttk.Combobox(root, width="15", values=("Left Click","Right Click","Middle Click","Double Right Click","Double Left Click","Double Middle Click"))
                 ttk.Label(root, text="""Select whether to right or
 left click the list""", anchor=E).place(x=350, y=200)
                 cmb.place(x=350, y=235)
@@ -219,9 +219,41 @@ left click the list""", anchor=E).place(x=350, y=200)
                             pyautogui.click(button='right')
                             pyautogui.click()
 
-
-                        
-                        
+                        elif cmb.get() == "Middle Click":
+                            
+                            screenWidth, screenHeight = pyautogui.size()
+                            currentMouseX, currentMouseY = pyautogui.position()
+                            pyautogui.moveTo(int(x_cords[i]), int(y_cords[i]))
+                            # print("Gonna Click",x_cords[i],y_cords[i])
+                            pyautogui.click(button='middle')
+                            pyautogui.click()
+                        elif cmb.get() == "Double Right Click":
+                            
+                            screenWidth, screenHeight = pyautogui.size()
+                            currentMouseX, currentMouseY = pyautogui.position()
+                            pyautogui.moveTo(int(x_cords[i]), int(y_cords[i]))
+                            # print("Gonna Click",x_cords[i],y_cords[i])
+                            pyautogui.click(clicks=2)
+                            pyautogui.click(button='right')
+                            pyautogui.click()
+                        elif cmb.get() == "Double Left Click":
+                            
+                            screenWidth, screenHeight = pyautogui.size()
+                            currentMouseX, currentMouseY = pyautogui.position()
+                            pyautogui.moveTo(int(x_cords[i]), int(y_cords[i]))
+                            # print("Gonna Click",x_cords[i],y_cords[i])
+                            pyautogui.click(clicks=2)
+                            pyautogui.click(button='left')
+                            pyautogui.click()
+                        elif cmb.get() == "Double Middle Click":
+                            
+                            screenWidth, screenHeight = pyautogui.size()
+                            currentMouseX, currentMouseY = pyautogui.position()
+                            pyautogui.moveTo(int(x_cords[i]), int(y_cords[i]))
+                            # print("Gonna Click",x_cords[i],y_cords[i])
+                            pyautogui.click(clicks=2)
+                            pyautogui.click(button='middle')
+                            pyautogui.click()
             
                 def delete(listbox):
                     global things
@@ -623,7 +655,7 @@ def OldStyleGUI():
             self.inputY = tk.Entry(self)
             self.inputY.grid(row=0, column=3)
             
-            self.cmb = ttk.Combobox(self, width="10", values=("Left Click","Right Click"))
+            self.cmb = ttk.Combobox(self, width="10", values=("Left Click","Right Click","Middle Click","Double Right Click","Double Left Click","Double Middle Click"))
             ttk.Label(self, text="Delay Between clicks", background="#e7dff2", anchor=E).grid(row=5, column=0)
             self.inputdelayentry = tk.StringVar()
 
@@ -709,7 +741,7 @@ right mouse button""", background="#e7dff2", anchor=E).grid(row=1, column=0)
                 y.place(x=350, y=170)
                 y_txt.set('')
 
-                cmb = ttk.Combobox(root, width="10", values=("Left Click","Right Click"))
+                cmb = ttk.Combobox(root, width="15", values=("Left Click","Right Click","Middle Click","Double Right Click","Double Left Click","Double Middle Click"))
                 ttk.Label(root, text="""Select whether to right or
 left click the list""", anchor=E).place(x=350, y=200)
                 cmb.place(x=350, y=235)
@@ -744,6 +776,43 @@ left click the list""", anchor=E).place(x=350, y=200)
                             # print("Gonna Click",x_cords[i],y_cords[i])
                             pyautogui.click(button='right')
                             pyautogui.click()
+
+                        elif cmb.get() == "Middle Click":
+                            
+                            screenWidth, screenHeight = pyautogui.size()
+                            currentMouseX, currentMouseY = pyautogui.position()
+                            pyautogui.moveTo(int(x_cords[i]), int(y_cords[i]))
+                            # print("Gonna Click",x_cords[i],y_cords[i])
+                            pyautogui.click(button='middle')
+                            pyautogui.click()
+                        elif cmb.get() == "Double Right Click":
+                            
+                            screenWidth, screenHeight = pyautogui.size()
+                            currentMouseX, currentMouseY = pyautogui.position()
+                            pyautogui.moveTo(int(x_cords[i]), int(y_cords[i]))
+                            # print("Gonna Click",x_cords[i],y_cords[i])
+                            pyautogui.click(clicks=2)
+                            pyautogui.click(button='right')
+                            pyautogui.click()
+                        elif cmb.get() == "Double Left Click":
+                            
+                            screenWidth, screenHeight = pyautogui.size()
+                            currentMouseX, currentMouseY = pyautogui.position()
+                            pyautogui.moveTo(int(x_cords[i]), int(y_cords[i]))
+                            # print("Gonna Click",x_cords[i],y_cords[i])
+                            pyautogui.click(clicks=2)
+                            pyautogui.click(button='left')
+                            pyautogui.click()
+                        elif cmb.get() == "Double Middle Click":
+                            
+                            screenWidth, screenHeight = pyautogui.size()
+                            currentMouseX, currentMouseY = pyautogui.position()
+                            pyautogui.moveTo(int(x_cords[i]), int(y_cords[i]))
+                            # print("Gonna Click",x_cords[i],y_cords[i])
+                            pyautogui.click(clicks=2)
+                            pyautogui.click(button='middle')
+                            pyautogui.click()
+            
 
 
                 def delete(listbox):
@@ -974,6 +1043,129 @@ left click the list""", anchor=E).place(x=350, y=200)
                             exit(0)
                         else:
                             pass
+            elif self.cmb.get() == "Middle Click":
+                y = self.inputY.get()
+                x = self.inputX.get()
+                running = True
+                try:
+                    x = int(x)
+                    y = int(y)
+                except:
+                    messagebox.showerror('Invalid point', 'Invalid point')
+                    YourGUI.destroy(self)
+                        
+                while running:
+                    pyautogui.FAILSAFE = False
+                    pyautogui.click(button='middle')
+                    pyautogui.click(x, y)
+                    time.sleep(int(self.inputdelayentry.get()))
+                               
+
+            
+                    num= int(self.inputdelayentry.get())
+                    start_time = datetime.datetime.now()
+                    while (datetime.datetime.now() - start_time).total_seconds() < num:
+                        if keyboard.is_pressed(self.inputhotkey.get()):
+                            exit(0)
+                    else:
+                        pass
+                    
+                    
+                    if keyboard.is_pressed(self.inputhotkey.get()):
+                        break
+            elif self.cmb.get() == "Double Right Click":
+                y = self.inputY.get()
+                x = self.inputX.get()
+                running = True
+                try:
+                    x = int(x)
+                    y = int(y)
+                except:
+                    messagebox.showerror('Invalid point', 'Invalid point')
+                    YourGUI.destroy(self)
+                        
+                while running:
+                    pyautogui.FAILSAFE = False
+                    pyautogui.click(clicks=2)
+                    pyautogui.click(button='right')
+                    pyautogui.click(x, y)
+                    time.sleep(int(self.inputdelayentry.get()))
+                               
+
+            
+                    num= int(self.inputdelayentry.get())
+                    start_time = datetime.datetime.now()
+                    while (datetime.datetime.now() - start_time).total_seconds() < num:
+                        if keyboard.is_pressed(self.inputhotkey.get()):
+                            exit(0)
+                    else:
+                        pass
+                    
+                    
+                    if keyboard.is_pressed(self.inputhotkey.get()):
+                        break
+            elif self.cmb.get() == "Double Left Click":
+                y = self.inputY.get()
+                x = self.inputX.get()
+                running = True
+                try:
+                    x = int(x)
+                    y = int(y)
+                except:
+                    messagebox.showerror('Invalid point', 'Invalid point')
+                    YourGUI.destroy(self)
+                        
+                while running:
+                    pyautogui.FAILSAFE = False
+                    pyautogui.click(clicks=2)
+                    pyautogui.click(button='left')
+                    pyautogui.click(x, y)
+                    time.sleep(int(self.inputdelayentry.get()))
+                               
+
+            
+                    num= int(self.inputdelayentry.get())
+                    start_time = datetime.datetime.now()
+                    while (datetime.datetime.now() - start_time).total_seconds() < num:
+                        if keyboard.is_pressed(self.inputhotkey.get()):
+                            exit(0)
+                    else:
+                        pass
+                    
+                    
+                    if keyboard.is_pressed(self.inputhotkey.get()):
+                        break
+            elif self.cmb.get() == "Double Middle Click":
+                y = self.inputY.get()
+                x = self.inputX.get()
+                running = True
+                try:
+                    x = int(x)
+                    y = int(y)
+                except:
+                    messagebox.showerror('Invalid point', 'Invalid point')
+                    YourGUI.destroy(self)
+                        
+                while running:
+                    pyautogui.FAILSAFE = False
+                    pyautogui.click(clicks=2)
+                    pyautogui.click(button='middle')
+                    pyautogui.click(x, y)
+                    time.sleep(int(self.inputdelayentry.get()))
+                               
+
+            
+                    num= int(self.inputdelayentry.get())
+                    start_time = datetime.datetime.now()
+                    while (datetime.datetime.now() - start_time).total_seconds() < num:
+                        if keyboard.is_pressed(self.inputhotkey.get()):
+                            exit(0)
+                    else:
+                        pass
+                    
+                    
+                    if keyboard.is_pressed(self.inputhotkey.get()):
+                        break
 
         def do_hotkey(self):
             hotkey = self.inputhotkey.get()
