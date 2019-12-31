@@ -52,8 +52,8 @@ Website: [https://kai9987kai.github.io/AutoClicker.html](https://kai9987kai.gith
 
 style number 1 
 
-![](https://raw.githubusercontent.com/kai9987kai/kai9987kai.github.io/master/help.PNG)
+![](https://raw.githubusercontent.com/kai9987kai/kai9987kai.github.io/master/Screenshots/help.PNG)
 
 style number 2
 
-![](https://raw.githubusercontent.com/kai9987kai/kai9987kai.github.io/master/yeet.PNG)
+![](https://raw.githubusercontent.com/kai9987kai/kai9987kai.github.io/master/Screenshots/yeet.PNG)
