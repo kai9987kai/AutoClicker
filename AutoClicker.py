@@ -110,7 +110,7 @@ right mouse button""", background="#e7dff2", anchor=E).grid(row=1, column=0)
             
     
             
-            tk.Label(self, text="ENTER X:", background="#ebdbff").grid(row=0, column=0)
+            ttk.Label(self, text="ENTER X:", background="#e7dff2").grid(row=0, column=0)
             self.inputY = ttk.Entry(self)
             self.inputY.grid(row=0, column=3)
             # Start Button ⬇
@@ -176,7 +176,7 @@ right mouse button""", background="#e7dff2", anchor=E).grid(row=1, column=0)
                 cmb = ttk.Combobox(root, width="15", values=("Left Click","Right Click","Middle Click","Double Right Click","Double Left Click","Double Middle Click"))
                 ttk.Label(root, text="""Select whether to right or
 left click the list""", anchor=E).place(x=350, y=200)
-                cmb.place(x=350, y=235)
+                cmb.place(x=350, y=250)
                 cmb.current(0)
                 root.title("AutoClicker - list of coordinates")
                 try:
@@ -1182,5 +1182,3 @@ left click the list""", anchor=E).place(x=350, y=200)
         your_gui.resizable(False, False)
         your_gui.configure(background="#e7dff2")
         your_gui.mainloop()
-
-
