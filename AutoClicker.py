@@ -12,6 +12,11 @@ import datetime
 import threading
 
 try:
+    import requests, time
+except:
+    pass  
+
+try:
     import win10toast #This module only works on windows
 except:
     pass
@@ -22,6 +27,43 @@ except:
 #  / ____ \ |__| |  | | | |__| | | |____| |____ _| || |____| . \| |____| | \ \ #
 # /_/    \_\____/   |_|  \____/   \_____|______|_____\_____|_|\_\______|_|  \_\#
 ################################################################################
+def feedback():
+    root= tk.Tk()
+    root.geometry("+300+300")
+    root.attributes("-topmost", True)
+    root.title('Send Feedback')  # Set title
+    try:
+        root.iconbitmap('favicon.ico')
+    except:
+        pass
+    root.resizable(False, False)
+    
+    label1 = tk.Label(root, text='Send Feedback', font=('helvetica', 14)).grid(row=1, column=3)
+
+    label2 = tk.Label(root, text='Type your Feedback:',font=('helvetica', 10)).grid(row=2, column=3)
+
+
+    entry1 = ttk.Entry(root).grid(row=3, column=3)
+
+    def sendfeedbackbutton():
+        try:
+            x1 = entry1.get()
+            r = requests.post('http://requestbin.net/r/1ec6wbt1', data={"Feedback":x1})
+            messagebox.showinfo('Feedback sent', 'Congratulations the Feedback has Sent')
+        except:
+            messagebox.showerror('Fail', 'Feedback failed to send')
+            pass
+        
+
+    button1 = ttk.Button(root, text='Send', command=sendfeedbackbutton).grid(row=4, column=3)
+
+
+    root.mainloop()
+
+
+
+
+
 def NOTIFICATION():
     try:
         toaster = win10toast.ToastNotifier()
@@ -379,6 +421,7 @@ left click the list""", anchor=E).place(x=350, y=200)
             new_item.add_command(label='Settings', command=settings)
             new_item.add_command(label='List of Coordinates', command=clicked3)
             new_item.add_command(label='Coordinates Finder', command=Finder)
+            new_item.add_command(label='Send Feedback', command=feedback)
             new_item.add_separator()
             new_item.add_command(label='Start', command=self.do_conversion)
             new_item.add_command(label='Exit', command=self.EXITME)
@@ -393,6 +436,7 @@ left click the list""", anchor=E).place(x=350, y=200)
             popup = Menu(self, tearoff=0)
             popup.add_command(label="About", command=callback)  # , command=next) etc...
             popup.add_command(label='GitHub Page', command=callback2)
+            popup.add_command(label='Send Feedback', command=feedback)
             popup.add_command(label='Auto Clicker Mega Spam', command=clicked2)
             popup.add_command(label='Version Number', command=NOTIFICATION)
             popup.add_command(label='Old Style Gui', command=OpenOldWindow)
@@ -942,6 +986,7 @@ left click the list""", anchor=E).place(x=350, y=200)
             new_item.add_command(label='Modern Style', command=OpenModernWindow)
             new_item.add_command(label='Auto Clicker Mega Spam', command=clicked2)
             new_item.add_command(label='Coordinates Finder', command=Finder)
+            new_item.add_command(label='Send Feedback', command=feedback)
             new_item.add_command(label='Settings', command=settings)
             new_item.add_separator()
             new_item.add_command(label='Start', command=self.do_conversion)
@@ -952,7 +997,8 @@ left click the list""", anchor=E).place(x=350, y=200)
             new_item2.add_command(label='Contact', command=clicked)
             menu.add_cascade(label='Help', menu=new_item2)
             popup = Menu(self, tearoff=0)
-            popup.add_command(label="About", command=callback) 
+            popup.add_command(label="About", command=callback)
+            popup.add_command(label="Send Feedback", command=feedback) 
             popup.add_command(label='GitHub Page', command=callback2)
             popup.add_command(label='Auto Clicker Mega Spam', command=clicked2)
             popup.add_command(label='Version Number', command=NOTIFICATION)
