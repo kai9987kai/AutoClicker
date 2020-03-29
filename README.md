@@ -48,7 +48,7 @@ Website: [https://kai9987kai.github.io/AutoClicker.html](https://kai9987kai.gith
   [About page](https://kai9987kai.github.io/AutoClicker.html)
   
 
-# Set the program up how you what it to look
+# Set the program up how you want it to look
 
 style number 1 
 
