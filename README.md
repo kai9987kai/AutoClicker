@@ -40,6 +40,8 @@ EMAIL1: kai9987kai@Gmail.com
 
 EMAIL2: kai.piper@aol.com
 
+EMAIL3: kaipiper@kai9987kai.pw
+
 Website: [https://kai9987kai.github.io/AutoClicker.html](https://kai9987kai.github.io/AutoClicker.html)
 
 
