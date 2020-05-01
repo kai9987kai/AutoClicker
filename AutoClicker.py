@@ -12,7 +12,9 @@ import datetime
 import threading
 
 try:
-    import requests, time
+    import gspread
+    from oauth2client.service_account import ServiceAccountCredentials
+    from pprint import pprint
 except:
     pass  
 
@@ -32,28 +34,36 @@ def feedback():
     root.geometry("+300+300")
     root.attributes("-topmost", True)
     root.title('Send Feedback')  # Set title
-    try:
-        root.iconbitmap('favicon.ico')
-    except:
-        pass
-    root.resizable(False, False)
-    
+    scope = ["https://spreadsheets.google.com/feeds", 'https://www.googleapis.com/auth/spreadsheets',
+         "https://www.googleapis.com/auth/drive.file", "https://www.googleapis.com/auth/drive"]
+    creds = creds = ServiceAccountCredentials.from_json_keyfile_name("creds.json", scope)
+    client = gspread.authorize(creds)
+    sheet = client.open("feedback").sheet1
     label1 = tk.Label(root, text='Send Feedback', font=('helvetica', 14)).grid(row=1, column=3)
 
-    label2 = tk.Label(root, text='Type your Feedback:',font=('helvetica', 10)).grid(row=2, column=3)
 
 
-    entry1 = ttk.Entry(root).grid(row=3, column=3)
+
+    
+
+    root.iconbitmap('favicon.ico')
+
+    root.resizable(False, False)
+    entry1 = ttk.Entry(root)
+    entry1.grid(row=3, column=3)
+    
 
     def sendfeedbackbutton():
         try:
             x1 = entry1.get()
-            r = requests.post('http://requestbin.net/r/1ec6wbt1', data={"Feedback":x1})
-            messagebox.showinfo('Feedback sent', 'Congratulations the Feedback has Sent')
+            sheet.update('A1', x1)
         except:
             messagebox.showerror('Fail', 'Feedback failed to send')
             pass
-        
+    label2 = tk.Label(root, text='Type your Feedback:',font=('helvetica', 10)).grid(row=2, column=3)
+
+
+            
 
     button1 = ttk.Button(root, text='Send', command=sendfeedbackbutton).grid(row=4, column=3)
 
