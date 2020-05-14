@@ -47,7 +47,7 @@ Website: [https://kai9987kai.github.io/AutoClicker.html](https://kai9987kai.gith
 
 # Project links:
  
-  [About page](https://kai9987kai.github.io/AutoClicker.html)
+  [About page](https://kai9987kai.pw/AutoClicker.html)
   
 
 # Set the program up how you want it to look
