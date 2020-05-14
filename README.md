@@ -33,6 +33,8 @@ win10toast (Optional)
 
 [Download](https://pypi.org/project/win10toast/)
 
+For the feedback page you need:
+gspread and oauth2client
 
 # Contact info:
 
