@@ -12,6 +12,7 @@ import datetime
 import threading
 import time
 
+
 try:
     import gspread
     from oauth2client.service_account import ServiceAccountCredentials
@@ -23,6 +24,7 @@ try:
     import win10toast #This module only works on windows
 except:
     pass
+
 ################################################################################
 #     /\  | |  | |__   __/ __ \   / ____| |    |_   _/ ____| |/ /  ____|  __ \ #
 #    /  \ | |  | |  | | | |  | | | |    | |      | || |    | ' /| |__  | |__) |#
@@ -48,8 +50,10 @@ def feedback():
 
 
     
-
-    root.iconbitmap('favicon.ico')
+    try:
+        root.iconbitmap('favicon.ico')
+    except:
+        pass
 
     root.resizable(False, False)
     entry1 = ttk.Entry(root)
@@ -60,6 +64,7 @@ def feedback():
         try:
             x1 = entry1.get()
             sheet.update('A1', x1)
+            messagebox.showinfo('Sent', 'Feedback was sent!!')
         except:
             messagebox.showerror('Fail', 'Feedback failed to send')
             pass
