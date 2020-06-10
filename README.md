@@ -21,17 +21,26 @@ don't get stuck clicking enter a failsafe key in the field called 'Keyboard key 
 
 # Python Modules Requirements:
 
-Keyboard Module
+Keyboard Module (Required)
 
 [Download](https://pypi.org/project/keyboard/#files)
 
-Pyautogui Module
+Pyautogui Module (Required)
 
 [Download](https://pypi.org/project/PyAutoGUI/)
 
 win10toast (Optional)
 
 [Download](https://pypi.org/project/win10toast/)
+
+gspread (Optional)
+
+[Download](https://gspread.readthedocs.io/en/latest/)
+
+oauth2client (Optional)
+
+[Download](https://pypi.org/project/oauth2client/)
+
 
 For the feedback page you need:
 gspread and oauth2client
