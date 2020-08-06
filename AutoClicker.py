@@ -6,6 +6,7 @@ from tkinter import *
 from tkinter import messagebox
 import keyboard
 from tkinter import ttk
+from tkinter import filedialog
 import os
 import sys
 import datetime
@@ -33,6 +34,32 @@ except:
 # /_/    \_\____/   |_|  \____/   \_____|______|_____\_____|_|\_\______|_|  \_\#
 ################################################################################
 
+def Locate_Click():
+    window = Tk()
+    label1 = tk.Label(window, text='Locate and click', font=('helvetica', 14)).pack()
+    def click_image():
+        locate = pyautogui.locateCenterOnScreen(window.filename)
+        pyautogui.click(locate)
+
+    def select_image():
+        window.filename =  filedialog.askopenfilename(initialdir = "/",title = "Select file",filetypes = (("jpeg files","*.jpg"),("all files","*.*")))
+    button_select = ttk.Button(window, text="Select Image",command=select_image)
+    button_Find = ttk.Button(window, text="Find and click on image",command=click_image)
+    button_select.pack()
+    button_Find.pack()
+    try:
+        window.iconbitmap('favicon.ico')
+    except:
+        pass
+    
+    window.attributes("-topmost", True)
+    window.resizable(False, False)
+    window.title("Locate and Click")
+    window.geometry("+300+300")
+    window.geometry("200x100")
+    window.mainloop()
+
+    
 
 def feedback():
     root= tk.Tk()
@@ -427,6 +454,7 @@ left click the list""", anchor=E).place(x=350, y=220)
             new_item.add_command(label='Auto Clicker Mega Spam', command=clicked2)
             new_item.add_command(label='Coordinates Finder', command=Finder)
             new_item.add_command(label='Send Feedback', command=feedback)
+            new_item.add_command(label='Locate and Click', command=Locate_Click)
             new_item.add_command(label='Settings', command=settings)
             new_item.add_separator()
             new_item.add_command(label='Start', command=self.do_conversion)
@@ -445,6 +473,7 @@ left click the list""", anchor=E).place(x=350, y=220)
             popup.add_command(label='Modern Style', command=OpenModernWindow)
             popup.add_command(label='Settings', command=settings)
             popup.add_command(label='List of coordinates', command=clicked3)
+            popup.add_command(label='Locate and Click', command=Locate_Click)
             popup.add_command(label='Find Coordinates', command=Finder)
             popup.add_separator()
             popup.add_command(label='Start', command=self.do_conversion)
@@ -986,6 +1015,7 @@ left click the list""", anchor=E).place(x=350, y=250)
             new_item.add_command(label='List of Coordinates', command=clicked3)
             new_item.add_command(label='Coordinates Finder', command=Finder)
             new_item.add_command(label='Send Feedback', command=feedback)
+            new_item.add_command(label='Locate and Click', command=Locate_Click)
             new_item.add_separator()
             new_item.add_command(label='Start', command=self.do_conversion)
             new_item.add_command(label='Exit', command=self.EXITME)
@@ -1001,6 +1031,7 @@ left click the list""", anchor=E).place(x=350, y=250)
             popup.add_command(label="About", command=callback)  # , command=next) etc...
             popup.add_command(label='GitHub Page', command=callback2)
             popup.add_command(label='Send Feedback', command=feedback)
+            popup.add_command(label='Locate and Click', command=Locate_Click)
             popup.add_command(label='Auto Clicker Mega Spam', command=clicked2)
             popup.add_command(label='Version Number', command=NOTIFICATION)
             popup.add_command(label='Old Style Gui', command=OpenOldWindow)
