@@ -26,6 +26,13 @@ try:
 except:
     pass
 
+try:
+    from PIL import ImageGrab
+    from colormap import rgb2hex
+    from win32api import GetSystemMetrics
+except:
+    pass
+
 ################################################################################
 #     /\  | |  | |__   __/ __ \   / ____| |    |_   _/ ____| |/ /  ____|  __ \ #
 #    /  \ | |  | |  | | | |  | | | |    | |      | || |    | ' /| |__  | |__) |#
@@ -33,6 +40,110 @@ except:
 #  / ____ \ |__| |  | | | |__| | | |____| |____ _| || |____| . \| |____| | \ \ #
 # /_/    \_\____/   |_|  \____/   \_____|______|_____\_____|_|\_\______|_|  \_\#
 ################################################################################
+
+def Colour_Clicker():
+    master = Tk()
+ 
+    master.title("Colour Clicker")
+    master.geometry("+300+300")
+    master.attributes("-topmost", True)
+    master.attributes("-topmost", True)
+    master.resizable(False, False)
+    master.geometry("+300+300")
+    try:
+        window.iconbitmap('favicon.ico')
+    except:
+        pass
+    
+    color = 1
+    xStart = 0
+    xEnd = 111
+    yStart = 0
+    yEnd  = 111
+    def return_entry():
+        
+        color = entry.get()
+    
+        xStart1 = entry2.get()
+        xStart = int(xStart1,10)
+    
+
+        xEnd1 = entry3.get()
+        xEnd = int(xEnd1,10)
+    
+        yStart1 = entry4.get()
+        yStart = int(yStart1,10)
+    
+        yEnd1  = entry5.get()
+        yEnd = int(yEnd1,10)
+
+        mainscript()
+# Create this method before you create the entry
+
+        
+
+    ttk.Label(master, text="Enter color in hexadecimals:").grid(row=0, sticky=W)
+    ttk.Label(master, text="Enter start cordinate in x axis:").grid(row=1, sticky=W)
+    ttk.Label(master, text="Enter stop cordinate in x axis:").grid(row=2, sticky=W)
+    ttk.Label(master, text="Enter start cordinate in y axis:").grid(row=3, sticky=W)
+    ttk.Label(master, text="Enter end cordinate in y axis:").grid(row=4, sticky=W)
+    ttk.Button(master, text="start", command= return_entry).grid(row=5, sticky=W)
+
+    entry = ttk.Entry(master)
+    entry.grid(row=0, column=1)
+    entry2 = ttk.Entry(master)
+    entry2.grid(row=1, column=1)
+    entry3 = ttk.Entry(master)
+    entry3.grid(row=2, column=1)
+    entry4 = ttk.Entry(master)
+    entry4.grid(row=3, column=1)
+    entry5 = ttk.Entry(master)
+    entry5.grid(row=4, column=1)
+
+
+    # Connect the entry with the return button
+    entry.bind('<Return>', return_entry) 
+    entry2.bind('<Return>', return_entry)
+    entry3.bind('<Return>', return_entry)
+    entry4.bind('<Return>', return_entry) 
+
+    def mainscript():
+        
+    
+        # returns the color of given pixel 
+        def get_pixel_colour(i_x, i_y):
+            import win32gui
+            i_desktop_window_id = win32gui.GetDesktopWindow()
+            i_desktop_window_dc = win32gui.GetWindowDC(i_desktop_window_id)
+            long_colour = win32gui.GetPixel(i_desktop_window_dc, i_x, i_y)
+            i_colour = int(long_colour)
+            print(long_colour)
+            return rgb2hex((i_colour & 0xff), ((i_colour >> 8) & 0xff), ((i_colour >> 16) & 0xff))
+
+            # get the size of screen 
+            width = GetSystemMetrics(0)
+            height = GetSystemMetrics(1)
+            stepSize = 10
+
+            # scanning the screen for given color 
+            selectedCordinates = []
+            for w in range(xStart, xEnd, 10):
+                for h in range(yStart, yEnd, 10):
+                    print("Now scanning pixel at", (w, h))
+                    if(get_pixel_colour(w, h)==(color)):
+                        selectedCordinates.append([w, h])
+                
+    
+
+
+            pyautogui.FAILSAFE = False
+
+            # start click events
+            for cordinate in selectedCordinates:
+                print("i got here")
+                pyautogui.click(x=cordinate[2], y=cordinate[1])
+    
+
 
 def Locate_Click():
     window = Tk()
@@ -455,6 +566,7 @@ left click the list""", anchor=E).place(x=350, y=220)
             new_item.add_command(label='Coordinates Finder', command=Finder)
             new_item.add_command(label='Send Feedback', command=feedback)
             new_item.add_command(label='Locate and Click', command=Locate_Click)
+            new_item.add_command(label='Colour/Color Clicker', command=Colour_Clicker)
             new_item.add_command(label='Settings', command=settings)
             new_item.add_separator()
             new_item.add_command(label='Start', command=self.do_conversion)
@@ -474,6 +586,7 @@ left click the list""", anchor=E).place(x=350, y=220)
             popup.add_command(label='Settings', command=settings)
             popup.add_command(label='List of coordinates', command=clicked3)
             popup.add_command(label='Locate and Click', command=Locate_Click)
+            popup.add_command(label='Colour/Color Clicker', command=Colour_Clicker)
             popup.add_command(label='Find Coordinates', command=Finder)
             popup.add_separator()
             popup.add_command(label='Start', command=self.do_conversion)
@@ -1015,6 +1128,7 @@ left click the list""", anchor=E).place(x=350, y=250)
             new_item.add_command(label='List of Coordinates', command=clicked3)
             new_item.add_command(label='Coordinates Finder', command=Finder)
             new_item.add_command(label='Send Feedback', command=feedback)
+            new_item.add_command(label='Colour/Color Clicker', command=Colour_Clicker)
             new_item.add_command(label='Locate and Click', command=Locate_Click)
             new_item.add_separator()
             new_item.add_command(label='Start', command=self.do_conversion)
@@ -1037,6 +1151,7 @@ left click the list""", anchor=E).place(x=350, y=250)
             popup.add_command(label='Old Style Gui', command=OpenOldWindow)
             popup.add_command(label='Settings', command=settings)
             popup.add_command(label='List of coordinates', command=clicked3)
+            popup.add_command(label='Colour/Color Clicker', command=Colour_Clicker)
             popup.add_command(label='Find Coordinates', command=Finder)
             popup.add_separator()
             popup.add_command(label='Start', command=self.do_conversion)
