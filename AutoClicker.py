@@ -47,9 +47,7 @@ def Colour_Clicker():
     master.title("Colour Clicker")
     master.geometry("+300+300")
     master.attributes("-topmost", True)
-    master.attributes("-topmost", True)
     master.resizable(False, False)
-    master.geometry("+300+300")
     try:
         window.iconbitmap('favicon.ico')
     except:
