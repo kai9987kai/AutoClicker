@@ -1,0 +1,10 @@
+pyautogui
+webbrowser
+keyboard
+threading
+gspread
+pprint
+win10toast
+colormap
+win32api
+PIL
