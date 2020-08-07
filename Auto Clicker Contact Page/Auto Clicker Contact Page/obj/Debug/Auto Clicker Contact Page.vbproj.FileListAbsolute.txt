@@ -34,3 +34,15 @@ C:\Users\test\Documents\GitHub\AutoClicker\Auto Clicker Contact Page\Auto Clicke
 C:\Users\test\Documents\GitHub\AutoClicker\Auto Clicker Contact Page\Auto Clicker Contact Page\obj\Debug\Auto Clicker Contact Page.exe
 C:\Users\test\Documents\GitHub\AutoClicker\Auto Clicker Contact Page\Auto Clicker Contact Page\obj\Debug\Auto Clicker Contact Page.xml
 C:\Users\test\Documents\GitHub\AutoClicker\Auto Clicker Contact Page\Auto Clicker Contact Page\obj\Debug\Auto Clicker Contact Page.pdb
+C:\Users\kai99\Documents\GitHub\AutoClicker\Auto Clicker Contact Page\Auto Clicker Contact Page\bin\Debug\Auto Clicker Contact Page.exe.config
+C:\Users\kai99\Documents\GitHub\AutoClicker\Auto Clicker Contact Page\Auto Clicker Contact Page\bin\Debug\Auto Clicker Contact Page.exe
+C:\Users\kai99\Documents\GitHub\AutoClicker\Auto Clicker Contact Page\Auto Clicker Contact Page\bin\Debug\Auto Clicker Contact Page.pdb
+C:\Users\kai99\Documents\GitHub\AutoClicker\Auto Clicker Contact Page\Auto Clicker Contact Page\bin\Debug\Auto Clicker Contact Page.xml
+C:\Users\kai99\Documents\GitHub\AutoClicker\Auto Clicker Contact Page\Auto Clicker Contact Page\obj\Debug\Auto Clicker Contact Page.vbprojAssemblyReference.cache
+C:\Users\kai99\Documents\GitHub\AutoClicker\Auto Clicker Contact Page\Auto Clicker Contact Page\obj\Debug\Auto_Clicker_Contact_Page.Form1.resources
+C:\Users\kai99\Documents\GitHub\AutoClicker\Auto Clicker Contact Page\Auto Clicker Contact Page\obj\Debug\Auto_Clicker_Contact_Page.Resources.resources
+C:\Users\kai99\Documents\GitHub\AutoClicker\Auto Clicker Contact Page\Auto Clicker Contact Page\obj\Debug\Auto Clicker Contact Page.vbproj.GenerateResource.cache
+C:\Users\kai99\Documents\GitHub\AutoClicker\Auto Clicker Contact Page\Auto Clicker Contact Page\obj\Debug\Auto Clicker Contact Page.vbproj.CoreCompileInputs.cache
+C:\Users\kai99\Documents\GitHub\AutoClicker\Auto Clicker Contact Page\Auto Clicker Contact Page\obj\Debug\Auto Clicker Contact Page.exe
+C:\Users\kai99\Documents\GitHub\AutoClicker\Auto Clicker Contact Page\Auto Clicker Contact Page\obj\Debug\Auto Clicker Contact Page.xml
+C:\Users\kai99\Documents\GitHub\AutoClicker\Auto Clicker Contact Page\Auto Clicker Contact Page\obj\Debug\Auto Clicker Contact Page.pdb
