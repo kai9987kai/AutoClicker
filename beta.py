@@ -88,6 +88,23 @@ def start_clicking(color, x_start, x_end, y_start, y_end):
 
 def mainscript(color, x_start, x_end, y_start, y_end):
     # Main script code goes here
+        # Main script code goes here
+    while True:
+        # Capture a screenshot of the specified area of the screen
+        screenshot = ImageGrab.grab(bbox=(x_start, y_start, x_end, y_end))
+        
+
+
+        # Convert the screenshot to a list of RGB
+        tuplespixels = screenshot.getdata()
+
+        # Iterate over the pixels in the screenshot
+        for pixel in pixels:
+            # Check if the pixel matches the specified color
+            if rgb2hex(pixel) == color:
+                # Click the mouse at the current position
+                pyautogui.click()
+                break
 
 if __name__ == '__main__':
     colour_clicker()
