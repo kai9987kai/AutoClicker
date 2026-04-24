@@ -1,10 +1,10 @@
 pyautogui
-webbrowser
 keyboard
-threading
+pystray
 gspread
-pprint
+oauth2client
 win10toast
 colormap
-win32api
-PIL
+pywin32
+Pillow
+numpy

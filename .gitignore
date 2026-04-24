@@ -102,3 +102,7 @@ venv.bak/
 
 # mypy
 .mypy_cache/
+
+# Local app state
+autoclicker_profiles.json
+autoclicker_workspace.json

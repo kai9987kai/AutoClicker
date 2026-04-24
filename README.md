@@ -1,72 +1,120 @@
-# What a Auto Clicker is?
-It spams clicks on the selected Coordinates, We also have a feature that allows for a list of coordinates to be performed and a mega auto clicker that is faster than the base version but is only limited by your computers specs.
-# Help / How to use the software
+# AutoClicker
 
+Windows desktop auto-clicker utilities built in Python with Tkinter and PyAutoGUI.
 
-1st click on Find Coordinates.
+## Current apps
 
+- `AutoClicker.py`
+  The full Control Center experience with profiles, quick tools, recording/playback, tray support, and richer run controls.
+- `lite-version.py`
+  A smaller launcher for fast coordinate clicking with burst mode and safer stop handling.
 
-2nd A window with 2 numbers on will open note down the numbers or leave the window open.
+## Newer full-app highlights
 
+- V10 scroll-first tool windows for Photo Clicker, Colour Clicker, Recording Studio, and Sequence Builder so every control stays reachable on smaller screens.
+- New photo presets, click offsets, settle delay, cursor-focused region tools, and match chime support in Photo Clicker.
+- New colour presets, recent swatches, max-click caps, cursor-focused scan regions, and safer pipette hotkey cleanup in Colour Clicker.
+- Recording Studio now supports duplicate, move, reverse, offset, and direct handoff into the sequence workflow.
+- Sequence Builder now supports selected-step editing, reverse order, loop counts, countdowns, and running from the selected step.
+- V9 accordion-style control center with dropdown sections so the main page starts compact instead of showing every option at once.
+- Quick action strip for start, stop, capture, preset application, and section reveal/hide control.
+- Innovation Lab presets including `Balanced`, `Precision`, `Burst Sprint`, and `Human Mimic`.
+- Optional micro-pause rhythm controls for long sessions to break up repetitive runs.
+- Scrollable control center with vertical and horizontal scrollbars for smaller screens and denser setups.
+- New Window Studio controls for theme switching, opacity, UI scale, size presets, fullscreen, and tray-close behaviour.
+- Improved theme handling with Light, Dark, and Ocean modes across the main control center.
+- Redesigned control center layout with clearer planner, tools, summary, and activity sections.
+- Saved profile import/export from JSON.
+- Workspace persistence for the last-used setup, recording points, and recent activity.
+- Runtime cap support for auto-stopping long runs.
+- Delay variance support for less rigid timing.
+- Stronger sequence builder with validation, reordering, duplication, and recording import.
+- Recording Studio for saving, loading, trimming, and reusing captured points.
+- Health Check window for dependency visibility, session state, and local config files.
+- Session activity feed for starts, stops, profile actions, and playback.
+- Improved tray restore, dependency handling, and shutdown cleanup.
 
-3rd Put the 1st number in the enter x field and the second the 2nd number in the entry field.
+## Full app quick start
 
+1. Install Python 3.10+ on Windows.
+2. Install dependencies:
 
-4th To finish up select whether you want it to spam left clicks or right clicks. To make sure you
-don't get stuck clicking enter a failsafe key in the field called 'Keyboard key to stop clicking' if you forget to do this then press ctrl + alt + delete at the same time then select log off.
+```bash
+pip install -r requirements.txt
+```
 
+3. Launch the main app:
 
-5th Press start button after that use your custom failsafe key to stop clicking.
+```bash
+python AutoClicker.py
+```
 
+## Lite app quick start
 
-# Python Modules Requirements:
+```bash
+python lite-version.py
+```
 
-Keyboard Module (Required)
+The lite app supports:
 
-[Download](https://pypi.org/project/keyboard/#files)
+- current-cursor capture
+- infinite or burst runs
+- configurable stop hotkey
+- left, right, middle, and double-left click modes
 
-Pyautogui Module (Required)
+## Main app workflow
 
-[Download](https://pypi.org/project/PyAutoGUI/)
+1. Capture or enter a target X/Y coordinate.
+2. Choose click type, delay, optional delay variance, jitter, and countdown.
+3. Pick either `Infinite` or `Burst Count`.
+4. Set a stop hotkey for any infinite run.
+5. Press `Start`.
 
-win10toast (Optional)
+Optional tools inside the full app:
 
-[Download](https://pypi.org/project/win10toast/)
+- Coordinate finder
+- Coordinate sequence builder
+- Recording Studio
+- Health Check
+- Photo clicker
+- Colour clicker
+- Recording and playback
+- Saved profiles
 
-gspread (Optional)
+## Generated local files
 
-[Download](https://gspread.readthedocs.io/en/latest/)
+- `autoclicker_profiles.json`
+  Saved clicker profiles from the full app.
+- `autoclicker_workspace.json`
+  Restored workspace state for the full app.
 
-oauth2client (Optional)
+These files are ignored by git.
 
-[Download](https://pypi.org/project/oauth2client/)
+## Dependencies
 
+- `pyautogui`
+- `keyboard`
+- `pystray`
+- `Pillow`
+- `pywin32`
+- `numpy`
 
-For the feedback page you need:
-gspread and oauth2client
+Some legacy optional features also use:
 
-# Contact info:
+- `gspread`
+- `oauth2client`
+- `win10toast`
+- `colormap`
 
-EMAIL1: kai9987kai@Gmail.com
+## Dependency troubleshooting
 
-EMAIL2: kai.piper@aol.com
+The project now fails more gracefully when a package is missing, but the core clickers still need:
 
-EMAIL3: kaipiper@kai9987kai.pw
+- `pyautogui`
+- `keyboard`
 
-Website: [https://kai9987kai.pw/AutoClicker.html](https://kai9987kai.pw/AutoClicker.html)
+If the full app or lite app reports a missing dependency, install the requirements again:
 
-
-# Project links:
- 
-  [About page](https://kai9987kai.pw/AutoClicker.html)
-  
-
-# Set the program up how you want it to look
-
-style number 1 
-
-![](https://raw.githubusercontent.com/kai9987kai/kai9987kai.github.io/master/Screenshots/help.PNG)
-
-style number 2
-
-![](https://raw.githubusercontent.com/kai9987kai/kai9987kai.github.io/master/Screenshots/yeet.PNG)
+```bash
+pip install -r requirements.txt
+```
