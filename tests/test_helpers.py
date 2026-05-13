@@ -202,6 +202,51 @@ class HelperTests(unittest.TestCase):
         self.assertIn("existing", preview["overwrites"])
         self.assertIn("new", preview["new_profiles"])
 
+    def test_readiness_checklist_is_ready_for_guarded_bounded_run(self):
+        readiness = AutoClicker._build_readiness_checklist(
+            {
+                "x": 100,
+                "y": 200,
+                "dry_run": False,
+                "pyautogui_failsafe": True,
+                "repeat_limit": None,
+                "runtime_limit": 0,
+                "max_actions": 25,
+                "delay": 0.1,
+                "stop_hotkey": "esc",
+            },
+            screen_size=(1920, 1080),
+        )
+
+        self.assertTrue(readiness["ready"])
+        self.assertEqual(readiness["review_count"], 0)
+        self.assertEqual(readiness["status"], "Ready")
+
+    def test_readiness_checklist_flags_risky_unbounded_run(self):
+        readiness = AutoClicker._build_readiness_checklist(
+            {
+                "x": 5000,
+                "y": -20,
+                "dry_run": False,
+                "pyautogui_failsafe": False,
+                "repeat_limit": None,
+                "runtime_limit": 0,
+                "max_actions": 0,
+                "delay": 0,
+                "stop_hotkey": "",
+            },
+            screen_size=(1920, 1080),
+        )
+
+        self.assertFalse(readiness["ready"])
+        self.assertEqual(readiness["review_count"], 5)
+        self.assertIn("Review 5 item(s)", AutoClicker._format_readiness_text(readiness))
+
+    def test_safety_presets_include_guarded_modes(self):
+        self.assertTrue(AutoClicker.SAFETY_PRESETS["Simulation"]["dry_run"])
+        self.assertTrue(AutoClicker.SAFETY_PRESETS["Guarded Live"]["pyautogui_failsafe"])
+        self.assertEqual(AutoClicker.SAFETY_PRESETS["Manual Stop Live"]["max_actions"], "0")
+
 
 if __name__ == "__main__":
     unittest.main()

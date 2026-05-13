@@ -97,6 +97,23 @@ PROFILE_ENUM_FIELDS = {
     "behaviour_preset": {"Balanced", "Precision", "Burst Sprint", "Human Mimic"},
     "theme": {"Light", "Dark", "Ocean"},
 }
+SAFETY_PRESETS = {
+    "Simulation": {
+        "dry_run": True,
+        "pyautogui_failsafe": True,
+        "max_actions": "25",
+    },
+    "Guarded Live": {
+        "dry_run": False,
+        "pyautogui_failsafe": True,
+        "max_actions": "250",
+    },
+    "Manual Stop Live": {
+        "dry_run": False,
+        "pyautogui_failsafe": True,
+        "max_actions": "0",
+    },
+}
 
 
 def _resource_path(file_name):
@@ -184,6 +201,140 @@ def _format_seconds(seconds):
         return f"{minutes}m {remainder:02d}s"
     hours, minutes = divmod(minutes, 60)
     return f"{hours}h {minutes:02d}m {remainder:02d}s"
+
+
+def _build_readiness_checklist(config, screen_size=None):
+    items = []
+
+    def add(label, state, detail):
+        items.append({"label": label, "state": state, "detail": detail})
+
+    x_pos = int(config.get("x", 0))
+    y_pos = int(config.get("y", 0))
+    if screen_size:
+        screen_width, screen_height = screen_size
+        if 0 <= x_pos < screen_width and 0 <= y_pos < screen_height:
+            add("Target", "ok", f"{x_pos}, {y_pos} is inside the screen.")
+        else:
+            clamped_x = max(0, min(screen_width - 1, x_pos))
+            clamped_y = max(0, min(screen_height - 1, y_pos))
+            add("Target", "review", f"{x_pos}, {y_pos} is outside the screen; run clamps to {clamped_x}, {clamped_y}.")
+    else:
+        add("Target", "ok", f"{x_pos}, {y_pos} configured.")
+
+    if config.get("dry_run"):
+        add("Output", "ok", "Dry run is on; no clicks will be sent.")
+    else:
+        add("Output", "ok", "Live click output is enabled.")
+
+    if config.get("pyautogui_failsafe"):
+        add("Fail-safe", "ok", "PyAutoGUI corner fail-safe is enabled.")
+    else:
+        add("Fail-safe", "review", "Corner fail-safe is off.")
+
+    repeat_limit = config.get("repeat_limit")
+    runtime_limit = float(config.get("runtime_limit", 0))
+    max_actions = int(config.get("max_actions", 0))
+    if repeat_limit is not None:
+        add("Stop boundary", "ok", f"Burst count stops after {repeat_limit} action(s).")
+    elif runtime_limit > 0:
+        add("Stop boundary", "ok", f"Runtime cap stops after {_format_seconds(runtime_limit)}.")
+    elif max_actions > 0:
+        add("Stop boundary", "ok", f"Max action cap stops after {max_actions} action(s).")
+    else:
+        add("Stop boundary", "review", "No runtime or action cap is set.")
+
+    delay = float(config.get("delay", 0))
+    if delay == 0:
+        add("Pace", "review", "Zero delay uses maximum available pace.")
+    else:
+        add("Pace", "ok", f"Base delay is {_format_seconds(delay)}.")
+
+    if config.get("stop_hotkey"):
+        add("Stop hotkey", "ok", f"Stop hotkey is {config['stop_hotkey']}.")
+    elif repeat_limit is None and runtime_limit == 0 and max_actions == 0:
+        add("Stop hotkey", "review", "Continuous run has no stop hotkey.")
+
+    review_count = sum(1 for item in items if item["state"] == "review")
+    status = "Ready" if review_count == 0 else f"Review {review_count} item(s)"
+    return {
+        "ready": review_count == 0,
+        "status": status,
+        "review_count": review_count,
+        "items": items,
+    }
+
+
+def _format_readiness_text(readiness, limit=6):
+    lines = [f"Readiness: {readiness['status']}"]
+    for item in readiness["items"][:limit]:
+        prefix = "OK" if item["state"] == "ok" else "Review"
+        lines.append(f"- {prefix} {item['label']}: {item['detail']}")
+    remaining = len(readiness["items"]) - limit
+    if remaining > 0:
+        lines.append(f"- +{remaining} more check(s)")
+    return "\n".join(lines)
+
+
+def _profile_payload_key(profile_data):
+    try:
+        return json.dumps(profile_data or {}, sort_keys=True, default=str)
+    except Exception:
+        return repr(profile_data)
+
+
+def _build_profile_state(profile_name, profile_choice, current_profile, saved_profiles):
+    profile_name = str(profile_name or "").strip()
+    profile_choice = str(profile_choice or "").strip()
+    saved_profiles = saved_profiles if isinstance(saved_profiles, dict) else {}
+
+    if not profile_name and not profile_choice:
+        return {
+            "state": "review",
+            "profile_name": "",
+            "profile_choice": "",
+            "detail": "Enter a profile name before saving this setup.",
+        }
+
+    active_name = profile_name or profile_choice
+    saved_profile = saved_profiles.get(active_name)
+    selection_note = ""
+    if profile_name and profile_choice and profile_name != profile_choice:
+        selection_note = f" Selected profile is '{profile_choice}'."
+
+    if saved_profile is None:
+        return {
+            "state": "new",
+            "profile_name": active_name,
+            "profile_choice": profile_choice,
+            "detail": f"'{active_name}' is not saved yet.{selection_note}",
+        }
+
+    if _profile_payload_key(current_profile) == _profile_payload_key(saved_profile):
+        return {
+            "state": "saved",
+            "profile_name": active_name,
+            "profile_choice": profile_choice,
+            "detail": f"'{active_name}' matches the saved profile.{selection_note}",
+        }
+
+    return {
+        "state": "modified",
+        "profile_name": active_name,
+        "profile_choice": profile_choice,
+        "detail": f"'{active_name}' has unsaved changes.{selection_note}",
+    }
+
+
+def _format_profile_state_text(profile_state):
+    labels = {
+        "saved": "Saved",
+        "modified": "Modified",
+        "new": "New",
+        "review": "Review",
+    }
+    label = labels.get(profile_state.get("state"), "Profile")
+    return f"Profile: {label} - {profile_state.get('detail', '')}"
 
 try:
     import pystray
@@ -4007,6 +4158,9 @@ def MAINWINDOW_REDESIGNED():
             self.screen_var = tk.StringVar(value=f"Screen: {self.screen_width} x {self.screen_height}")
             self.plan_var = tk.StringVar(value="")
             self.run_intelligence_var = tk.StringVar(value="Run intelligence will appear after configuration is valid.")
+            self.safety_status_var = tk.StringVar(value="Safety: live clicks | corner fail-safe off | no action cap")
+            self.readiness_var = tk.StringVar(value="Readiness: awaiting configuration.")
+            self.profile_state_var = tk.StringVar(value="Profile: awaiting configuration.")
             self.session_var = tk.StringVar(value="No clicks sent yet.")
             self.last_run_var = tk.StringVar(value="Idle")
             self.recording_summary_var = tk.StringVar(value="Recording: 0 point(s) | idle")
@@ -4210,6 +4364,13 @@ def MAINWINDOW_REDESIGNED():
                 font=("Segoe UI", 10),
             )
             self.style.map("App.TCheckbutton", background=[("active", palette["card_bg"])])
+            self.style.configure(
+                "Command.TCheckbutton",
+                background=palette["alt_bg"],
+                foreground=palette["text"],
+                font=("Segoe UI", 10, "bold"),
+            )
+            self.style.map("Command.TCheckbutton", background=[("active", palette["alt_bg"])])
             self.style.configure("App.Horizontal.TScale", background=palette["card_bg"])
             self.style.configure("TEntry", fieldbackground=palette["list_bg"], foreground=palette["list_fg"])
             self.style.configure(
@@ -4355,6 +4516,19 @@ def MAINWINDOW_REDESIGNED():
             self._update_plan_summary()
             self._schedule_workspace_save()
 
+        def _apply_safety_preset(self, preset_name):
+            preset = SAFETY_PRESETS.get(preset_name)
+            if not preset:
+                return
+
+            self.dry_run_var.set(bool(preset["dry_run"]))
+            self.pyautogui_failsafe_var.set(bool(preset["pyautogui_failsafe"]))
+            self.max_actions_var.set(str(preset["max_actions"]))
+            self.status_var.set(f"Applied safety preset '{preset_name}'.")
+            self._append_activity(f"Safety preset applied: {preset_name}.")
+            self._update_plan_summary()
+            self._schedule_workspace_save()
+
         def _build_layout(self):
             self.main_shell_min_width = 1180
 
@@ -4411,17 +4585,26 @@ def MAINWINDOW_REDESIGNED():
             command_strip.columnconfigure(6, weight=1)
             command_strip.columnconfigure(7, weight=1)
 
-            ttk.Button(command_strip, text="Start", style="Accent.TButton", command=self.startclick).grid(row=0, column=0, sticky="ew")
+            self.start_button = ttk.Button(command_strip, text="Start", style="Accent.TButton", command=self.startclick)
+            self.start_button.grid(row=0, column=0, sticky="ew")
             self.stop_button = ttk.Button(command_strip, text="Stop", style="Danger.TButton", command=self.stopclick, state=DISABLED)
             self.stop_button.grid(row=0, column=1, sticky="ew", padx=(8, 0))
             ttk.Button(command_strip, text="Capture Cursor", style="Secondary.TButton", command=self._capture_cursor_position).grid(row=0, column=2, sticky="ew", padx=(8, 0))
-            ttk.Button(command_strip, text="Expand All", style="Secondary.TButton", command=self._expand_all_sections).grid(row=0, column=3, sticky="ew", padx=(8, 0))
-            ttk.Button(command_strip, text="Collapse Extras", style="Secondary.TButton", command=self._collapse_all_sections).grid(row=0, column=4, sticky="ew", padx=(8, 0))
-            self.command_preset_combo = ttk.Combobox(command_strip, textvariable=self.behaviour_preset_var, values=("Balanced", "Precision", "Burst Sprint", "Human Mimic"), state="readonly")
-            self.command_preset_combo.grid(row=0, column=5, sticky="ew", padx=(8, 0))
-            ttk.Button(command_strip, text="Apply Preset", style="Secondary.TButton", command=self._apply_behaviour_preset).grid(row=0, column=6, sticky="ew", padx=(8, 0))
+            ttk.Button(command_strip, text="Validate Plan", style="Secondary.TButton", command=self._validate_current_plan).grid(row=0, column=3, sticky="ew", padx=(8, 0))
+            ttk.Checkbutton(command_strip, text="Dry Run", variable=self.dry_run_var, style="Command.TCheckbutton").grid(row=0, column=4, sticky="w", padx=(12, 0))
+            ttk.Checkbutton(command_strip, text="Fail-safe", variable=self.pyautogui_failsafe_var, style="Command.TCheckbutton").grid(row=0, column=5, sticky="w", padx=(12, 0))
+            ttk.Button(command_strip, text="Safety Guard", style="Secondary.TButton", command=lambda: self._set_dropdown_state("safety_guard", True)).grid(row=0, column=6, sticky="ew", padx=(8, 0))
             ttk.Button(command_strip, text="Window Settings", style="Secondary.TButton", command=self._open_settings_window).grid(row=0, column=7, sticky="ew", padx=(8, 0))
-            tk.Label(command_strip, textvariable=self.preset_summary_var, bg="#edf4ff", fg="#0f766e", font=("Segoe UI", 9, "bold"), wraplength=1030, justify=LEFT).grid(row=1, column=0, columnspan=8, sticky="w", pady=(10, 0))
+            ttk.Button(command_strip, text="Expand All", style="Secondary.TButton", command=self._expand_all_sections).grid(row=1, column=0, sticky="ew", pady=(8, 0))
+            ttk.Button(command_strip, text="Collapse Extras", style="Secondary.TButton", command=self._collapse_all_sections).grid(row=1, column=1, sticky="ew", padx=(8, 0), pady=(8, 0))
+            self.command_preset_combo = ttk.Combobox(command_strip, textvariable=self.behaviour_preset_var, values=("Balanced", "Precision", "Burst Sprint", "Human Mimic"), state="readonly")
+            self.command_preset_combo.grid(row=1, column=2, columnspan=2, sticky="ew", padx=(8, 0), pady=(8, 0))
+            ttk.Button(command_strip, text="Apply Preset", style="Secondary.TButton", command=self._apply_behaviour_preset).grid(row=1, column=4, sticky="ew", padx=(8, 0), pady=(8, 0))
+            ttk.Button(command_strip, text="Health Check", style="Secondary.TButton", command=self._open_health_dashboard).grid(row=1, column=5, sticky="ew", padx=(8, 0), pady=(8, 0))
+            ttk.Button(command_strip, text="Session Report", style="Secondary.TButton", command=self._export_session_report).grid(row=1, column=6, sticky="ew", padx=(8, 0), pady=(8, 0))
+            ttk.Button(command_strip, text="State Folder", style="Secondary.TButton", command=self._open_state_folder).grid(row=1, column=7, sticky="ew", padx=(8, 0), pady=(8, 0))
+            tk.Label(command_strip, textvariable=self.safety_status_var, bg="#edf4ff", fg="#334155", font=("Segoe UI", 9, "bold"), wraplength=1030, justify=LEFT).grid(row=2, column=0, columnspan=8, sticky="w", pady=(10, 0))
+            tk.Label(command_strip, textvariable=self.preset_summary_var, bg="#edf4ff", fg="#0f766e", font=("Segoe UI", 9, "bold"), wraplength=1030, justify=LEFT).grid(row=3, column=0, columnspan=8, sticky="w", pady=(4, 0))
 
             workspace = tk.Frame(shell, bg="#dbe7f2")
             workspace.grid(row=2, column=0, sticky="nsew", pady=(16, 0))
@@ -4508,8 +4691,14 @@ def MAINWINDOW_REDESIGNED():
             ttk.Entry(safety_body, textvariable=self.max_actions_var).grid(row=0, column=1, sticky="ew", pady=(0, 6))
             ttk.Checkbutton(safety_body, text="PyAutoGUI corner fail-safe", variable=self.pyautogui_failsafe_var, style="App.TCheckbutton").grid(row=0, column=2, columnspan=2, sticky="w", padx=(14, 0), pady=(0, 6))
             ttk.Checkbutton(safety_body, text="Dry run, no click output", variable=self.dry_run_var, style="App.TCheckbutton").grid(row=1, column=0, columnspan=2, sticky="w", pady=(0, 6))
-            ttk.Button(safety_body, text="Validate Plan", style="Secondary.TButton", command=self._validate_current_plan).grid(row=2, column=0, sticky="ew", pady=(0, 6))
-            tk.Label(safety_body, textvariable=self.run_intelligence_var, bg="#f8fafc", fg="#475569", font=("Segoe UI", 9), wraplength=620, justify=LEFT).grid(row=2, column=1, columnspan=3, sticky="w", padx=(14, 0), pady=(0, 6))
+            tk.Label(safety_body, text="Safety presets", bg="#f8fafc", fg="#0f172a", font=("Segoe UI", 10, "bold")).grid(row=2, column=0, sticky="w", pady=(0, 6))
+            safety_preset_row = tk.Frame(safety_body, bg="#f8fafc")
+            safety_preset_row.grid(row=2, column=1, columnspan=3, sticky="ew", padx=(14, 0), pady=(0, 6))
+            for index, preset_name in enumerate(SAFETY_PRESETS):
+                safety_preset_row.columnconfigure(index, weight=1)
+                ttk.Button(safety_preset_row, text=preset_name, style="Chip.TButton", command=lambda value=preset_name: self._apply_safety_preset(value)).grid(row=0, column=index, sticky="ew", padx=(0 if index == 0 else 6, 0))
+            ttk.Button(safety_body, text="Validate Plan", style="Secondary.TButton", command=self._validate_current_plan).grid(row=3, column=0, sticky="ew", pady=(0, 6))
+            tk.Label(safety_body, textvariable=self.run_intelligence_var, bg="#f8fafc", fg="#475569", font=("Segoe UI", 9), wraplength=620, justify=LEFT).grid(row=3, column=1, columnspan=3, sticky="w", padx=(14, 0), pady=(0, 6))
 
             innovation_card, innovation_body = self._create_dropdown_section(
                 left_stack,
@@ -4648,34 +4837,51 @@ def MAINWINDOW_REDESIGNED():
             tk.Label(summary_body, textvariable=self.plan_var, bg="#f8fafc", fg="#334155", font=("Segoe UI", 10), wraplength=360, justify=LEFT).grid(row=1, column=0, sticky="w", pady=(4, 8))
             tk.Label(summary_body, text="Run Intelligence", bg="#f8fafc", fg="#0f172a", font=("Segoe UI", 10, "bold")).grid(row=2, column=0, sticky="w")
             tk.Label(summary_body, textvariable=self.run_intelligence_var, bg="#f8fafc", fg="#334155", font=("Segoe UI", 10), wraplength=360, justify=LEFT).grid(row=3, column=0, sticky="w", pady=(4, 8))
-            tk.Label(summary_body, text="Session", bg="#f8fafc", fg="#0f172a", font=("Segoe UI", 10, "bold")).grid(row=4, column=0, sticky="w")
-            tk.Label(summary_body, textvariable=self.session_var, bg="#f8fafc", fg="#334155", font=("Segoe UI", 10), wraplength=360, justify=LEFT).grid(row=5, column=0, sticky="w", pady=(4, 8))
-            tk.Label(summary_body, text="Last run", bg="#f8fafc", fg="#0f172a", font=("Segoe UI", 10, "bold")).grid(row=6, column=0, sticky="w")
-            tk.Label(summary_body, textvariable=self.last_run_var, bg="#f8fafc", fg="#334155", font=("Segoe UI", 10), wraplength=360, justify=LEFT).grid(row=7, column=0, sticky="w", pady=(4, 8))
+            tk.Label(summary_body, text="Readiness", bg="#f8fafc", fg="#0f172a", font=("Segoe UI", 10, "bold")).grid(row=4, column=0, sticky="w")
+            tk.Label(summary_body, textvariable=self.readiness_var, bg="#f8fafc", fg="#334155", font=("Segoe UI", 9), wraplength=360, justify=LEFT).grid(row=5, column=0, sticky="w", pady=(4, 8))
+            tk.Label(summary_body, text="Profile", bg="#f8fafc", fg="#0f172a", font=("Segoe UI", 10, "bold")).grid(row=6, column=0, sticky="w")
+            tk.Label(summary_body, textvariable=self.profile_state_var, bg="#f8fafc", fg="#334155", font=("Segoe UI", 9), wraplength=360, justify=LEFT).grid(row=7, column=0, sticky="w", pady=(4, 8))
+            tk.Label(summary_body, text="Safety", bg="#f8fafc", fg="#0f172a", font=("Segoe UI", 10, "bold")).grid(row=8, column=0, sticky="w")
+            tk.Label(summary_body, textvariable=self.safety_status_var, bg="#f8fafc", fg="#334155", font=("Segoe UI", 10), wraplength=360, justify=LEFT).grid(row=9, column=0, sticky="w", pady=(4, 8))
+            tk.Label(summary_body, text="Session", bg="#f8fafc", fg="#0f172a", font=("Segoe UI", 10, "bold")).grid(row=10, column=0, sticky="w")
+            tk.Label(summary_body, textvariable=self.session_var, bg="#f8fafc", fg="#334155", font=("Segoe UI", 10), wraplength=360, justify=LEFT).grid(row=11, column=0, sticky="w", pady=(4, 8))
+            tk.Label(summary_body, text="Last run", bg="#f8fafc", fg="#0f172a", font=("Segoe UI", 10, "bold")).grid(row=12, column=0, sticky="w")
+            tk.Label(summary_body, textvariable=self.last_run_var, bg="#f8fafc", fg="#334155", font=("Segoe UI", 10), wraplength=360, justify=LEFT).grid(row=13, column=0, sticky="w", pady=(4, 8))
             self.total_session_clicks_var = tk.StringVar(value="Total Session Clicks: 0")
             self.session_elapsed_var = tk.StringVar(value="Session Elapsed: 00:00:00")
-            tk.Label(summary_body, textvariable=self.total_session_clicks_var, bg="#f8fafc", fg="#0f766e", font=("Segoe UI", 9, "bold")).grid(row=8, column=0, sticky="w")
-            tk.Label(summary_body, textvariable=self.session_elapsed_var, bg="#f8fafc", fg="#0f766e", font=("Segoe UI", 9, "bold")).grid(row=9, column=0, sticky="w", pady=(4, 0))
-            tk.Label(summary_body, text="Preset", bg="#f8fafc", fg="#0f172a", font=("Segoe UI", 10, "bold")).grid(row=10, column=0, sticky="w", pady=(12, 0))
-            tk.Label(summary_body, textvariable=self.preset_summary_var, bg="#f8fafc", fg="#334155", font=("Segoe UI", 10), wraplength=360, justify=LEFT).grid(row=11, column=0, sticky="w", pady=(4, 0))
+            tk.Label(summary_body, textvariable=self.total_session_clicks_var, bg="#f8fafc", fg="#0f766e", font=("Segoe UI", 9, "bold")).grid(row=14, column=0, sticky="w")
+            tk.Label(summary_body, textvariable=self.session_elapsed_var, bg="#f8fafc", fg="#0f766e", font=("Segoe UI", 9, "bold")).grid(row=15, column=0, sticky="w", pady=(4, 0))
+            tk.Label(summary_body, text="Preset", bg="#f8fafc", fg="#0f172a", font=("Segoe UI", 10, "bold")).grid(row=16, column=0, sticky="w", pady=(12, 0))
+            tk.Label(summary_body, textvariable=self.preset_summary_var, bg="#f8fafc", fg="#334155", font=("Segoe UI", 10), wraplength=360, justify=LEFT).grid(row=17, column=0, sticky="w", pady=(4, 0))
+
+            support_card, support_body = self._create_card(
+                right_stack,
+                "Support Hub",
+                "State, health, and export shortcuts stay close to the live run summary."
+            )
+            support_card.grid(row=1, column=0, sticky="ew", pady=(12, 0))
+            support_body.columnconfigure(0, weight=1)
+            support_body.columnconfigure(1, weight=1)
+            ttk.Button(support_body, text="Health Check", style="Secondary.TButton", command=self._open_health_dashboard).grid(row=0, column=0, sticky="ew", pady=(0, 8))
+            ttk.Button(support_body, text="Session Report", style="Secondary.TButton", command=self._export_session_report).grid(row=0, column=1, sticky="ew", padx=(8, 0), pady=(0, 8))
+            ttk.Button(support_body, text="Backup State", style="Secondary.TButton", command=self._backup_state_snapshot).grid(row=1, column=0, sticky="ew")
+            ttk.Button(support_body, text="Open State Folder", style="Secondary.TButton", command=self._open_state_folder).grid(row=1, column=1, sticky="ew", padx=(8, 0))
 
             controls_card, controls_body = self._create_card(
                 right_stack,
                 "Controls and Activity",
                 "Always-available side rail for launch actions and recent activity."
             )
-            controls_card.grid(row=1, column=0, sticky="ew", pady=(12, 0))
+            controls_card.grid(row=2, column=0, sticky="ew", pady=(12, 0))
             controls_body.columnconfigure(0, weight=1)
-            controls_body.rowconfigure(6, weight=1)
+            controls_body.rowconfigure(4, weight=1)
             ttk.Button(controls_body, text="Mini Control", style="Secondary.TButton", command=self._open_mini_control).grid(row=0, column=0, sticky="ew", pady=(0, 8))
             ttk.Button(controls_body, text="Old Style GUI", style="Secondary.TButton", command=self._open_old_window).grid(row=1, column=0, sticky="ew", pady=(0, 8))
             ttk.Button(controls_body, text="Recording Studio", style="Secondary.TButton", command=self._open_recording_studio).grid(row=2, column=0, sticky="ew", pady=(0, 8))
-            ttk.Button(controls_body, text="Health Check", style="Secondary.TButton", command=self._open_health_dashboard).grid(row=3, column=0, sticky="ew", pady=(0, 8))
-            ttk.Button(controls_body, text="Export Session Report", style="Secondary.TButton", command=self._export_session_report).grid(row=4, column=0, sticky="ew", pady=(0, 8))
-            tk.Label(controls_body, text="Recent activity", bg="#f8fafc", fg="#0f172a", font=("Segoe UI", 10, "bold")).grid(row=5, column=0, sticky="w", pady=(4, 6))
+            tk.Label(controls_body, text="Recent activity", bg="#f8fafc", fg="#0f172a", font=("Segoe UI", 10, "bold")).grid(row=3, column=0, sticky="w", pady=(4, 6))
             self.activity_list = Listbox(controls_body, height=10, font=("Segoe UI", 9), bg="white", fg="#0f172a", selectbackground="#1d4ed8", activestyle="none", exportselection=False)
-            self.activity_list.grid(row=6, column=0, sticky="nsew", pady=(0, 8))
-            ttk.Button(controls_body, text="Exit", style="Secondary.TButton", command=self.EXITME).grid(row=7, column=0, sticky="ew")
+            self.activity_list.grid(row=4, column=0, sticky="nsew", pady=(0, 8))
+            ttk.Button(controls_body, text="Exit", style="Secondary.TButton", command=self.EXITME).grid(row=5, column=0, sticky="ew")
 
             footer = tk.Frame(shell, bg="#dbe7f2")
             footer.grid(row=3, column=0, sticky="ew", pady=(16, 0))
@@ -4754,6 +4960,8 @@ def MAINWINDOW_REDESIGNED():
             tools_menu.add_command(label='Recording Studio', command=self._open_recording_studio)
             tools_menu.add_command(label='Health Check', command=self._open_health_dashboard)
             tools_menu.add_command(label='Export Session Report', command=self._export_session_report)
+            tools_menu.add_command(label='Backup State Snapshot', command=self._backup_state_snapshot)
+            tools_menu.add_command(label='Open State Folder', command=self._open_state_folder)
             tools_menu.add_separator()
             tools_menu.add_command(label='Window Settings', command=self._open_settings_window)
             tools_menu.add_command(label='Old Style GUI', command=self._open_old_window)
@@ -4785,6 +4993,8 @@ def MAINWINDOW_REDESIGNED():
             self.popup.add_command(label='Recording Studio', command=self._open_recording_studio)
             self.popup.add_command(label='Health Check', command=self._open_health_dashboard)
             self.popup.add_command(label='Export Session Report', command=self._export_session_report)
+            self.popup.add_command(label='Backup State Snapshot', command=self._backup_state_snapshot)
+            self.popup.add_command(label='Open State Folder', command=self._open_state_folder)
             self.popup.add_separator()
             self.popup.add_command(label='Window Settings', command=self._open_settings_window)
             self.popup.add_command(label='Exit', command=self.EXITME)
@@ -4889,6 +5099,42 @@ def MAINWINDOW_REDESIGNED():
             self.ui_scale_var.set(1.0)
             self._set_window_size_preset(1080, 760)
             self.status_var.set("Window layout reset to the default studio preset.")
+
+        def _fit_window_to_screen(self):
+            self.fullscreen_var.set(False)
+            width = max(860, min(self.screen_width - 80, 1480))
+            height = max(560, min(self.screen_height - 120, 920))
+            x_pos = max(0, (self.screen_width - width) // 2)
+            y_pos = max(0, (self.screen_height - height) // 2)
+            self.geometry(f"{width}x{height}+{x_pos}+{y_pos}")
+            self.status_var.set(f"Window fit to screen at {width} x {height}.")
+            self._append_activity(f"Window fit to screen at {width} x {height}.")
+            self._schedule_workspace_save()
+
+        def _set_window_opacity_preset(self, value):
+            self.window_opacity_var.set(value)
+            self._apply_window_preferences()
+            self._schedule_workspace_save()
+
+        def _set_ui_scale_preset(self, value):
+            self.ui_scale_var.set(value)
+            self._apply_window_preferences()
+            self._schedule_workspace_save()
+
+        def _remember_current_window_layout(self):
+            self.remember_window_geometry_var.set(True)
+            self._persist_workspace_state()
+            self.status_var.set("Current window layout saved.")
+            self._append_activity("Current window layout saved.")
+
+        def _reset_visual_preferences(self):
+            self.theme_var.set("Light")
+            self.window_opacity_var.set(1.0)
+            self.ui_scale_var.set(1.0)
+            self._apply_theme()
+            self._apply_window_preferences()
+            self.status_var.set("Visual preferences reset.")
+            self._append_activity("Visual preferences reset.")
 
         def _apply_window_preferences(self):
             opacity = round(self._normalize_window_opacity(), 2)
@@ -5273,12 +5519,28 @@ def MAINWINDOW_REDESIGNED():
 
             warnings_count = sum(len(messages) for messages in preview["warnings_by_profile"].values())
             if preview["invalid_count"] or preview["overwrite_count"] or warnings_count:
+                def preview_names(label, names):
+                    names = sorted(str(name) for name in names)
+                    if not names:
+                        return []
+                    shown = ", ".join(names[:5])
+                    if len(names) > 5:
+                        shown = f"{shown}, +{len(names) - 5} more"
+                    return [f"{label}: {shown}"]
+
+                invalid_names = [profile["name"] for profile in preview["invalid_profiles"]]
+                warning_names = sorted(preview["warnings_by_profile"])
                 summary_lines = [
                     f"Valid profiles: {preview['valid_count']}",
                     f"New profiles: {preview['new_count']}",
                     f"Profiles that will overwrite existing profiles: {preview['overwrite_count']}",
                     f"Invalid profiles that will be skipped: {preview['invalid_count']}",
                     f"Warnings: {warnings_count}",
+                    "",
+                    *preview_names("New", preview["new_profiles"]),
+                    *preview_names("Overwrite", preview["overwrites"]),
+                    *preview_names("Invalid", invalid_names),
+                    *preview_names("Warnings", warning_names),
                     "",
                     "Continue importing the valid profiles?",
                 ]
@@ -5310,6 +5572,34 @@ def MAINWINDOW_REDESIGNED():
                 os.startfile(target_path)
             except Exception as exc:
                 messagebox.showerror("Open failed", f"Unable to open:\n{target_path}\n\n{exc}", parent=self)
+
+        def _open_state_folder(self):
+            state_directory = os.path.dirname(self.profile_file)
+            try:
+                os.makedirs(state_directory, exist_ok=True)
+            except Exception as exc:
+                messagebox.showerror("Open failed", f"Unable to prepare the state folder.\n{exc}", parent=self)
+                return
+            self._open_path_in_explorer(state_directory)
+            self._append_activity("Opened state folder.")
+
+        def _backup_state_snapshot(self):
+            try:
+                backup_result = _backup_state_files()
+            except Exception as exc:
+                messagebox.showerror("Backup failed", f"Unable to back up state files.\n{exc}", parent=self)
+                return
+
+            backup_dir = backup_result["backup_dir"]
+            copied_count = backup_result["count"]
+            manifest_path = backup_result["manifest_path"]
+            if copied_count:
+                message = f"Backed up {copied_count} state file(s).\n\nFolder:\n{backup_dir}"
+            else:
+                message = f"No state files were found yet.\n\nCreated manifest:\n{manifest_path}"
+            messagebox.showinfo("State backup", message, parent=self)
+            self.status_var.set(f"State backup ready: {os.path.basename(backup_dir)}.")
+            self._append_activity(f"State backup created with {copied_count} file(s).")
 
         def _export_activity_log(self):
             if not self.activity_history:
@@ -5388,6 +5678,9 @@ def MAINWINDOW_REDESIGNED():
 
             button_row = tk.Frame(body, bg="#edf4ff")
             button_row.grid(row=3, column=0, sticky="ew", pady=(12, 0))
+            button_row.columnconfigure(0, weight=1)
+            button_row.columnconfigure(1, weight=1)
+            button_row.columnconfigure(2, weight=1)
 
             def build_report():
                 dependency_names = ("pyautogui", "keyboard", "pystray", "Pillow")
@@ -5432,6 +5725,7 @@ def MAINWINDOW_REDESIGNED():
                     f"- Geometry: {self.geometry()}",
                     f"- Theme: {self.theme_var.get()}",
                     f"- Behaviour preset: {self.behaviour_preset_var.get()}",
+                    f"- Profile state: {self.profile_state_var.get()}",
                     f"- Run intelligence: {self.run_intelligence_var.get()}",
                     f"- Max action cap: {self.max_actions_var.get()}",
                     f"- PyAutoGUI corner fail-safe: {'enabled' if self.pyautogui_failsafe_var.get() else 'disabled'}",
@@ -5451,10 +5745,12 @@ def MAINWINDOW_REDESIGNED():
                 report_box.insert("1.0", build_report())
                 report_box.configure(state="disabled")
 
-            ttk.Button(button_row, text="Refresh", style="Secondary.TButton", command=refresh_report).grid(row=0, column=0, padx=(0, 8))
-            ttk.Button(button_row, text="Open Profiles File", style="Secondary.TButton", command=lambda: self._open_path_in_explorer(self.profile_file)).grid(row=0, column=1, padx=(0, 8))
-            ttk.Button(button_row, text="Open Workspace File", style="Secondary.TButton", command=lambda: self._open_path_in_explorer(self.workspace_file)).grid(row=0, column=2, padx=(0, 8))
-            ttk.Button(button_row, text="Export Activity", style="Secondary.TButton", command=self._export_activity_log).grid(row=0, column=3)
+            ttk.Button(button_row, text="Refresh", style="Secondary.TButton", command=refresh_report).grid(row=0, column=0, sticky="ew", padx=(0, 8), pady=(0, 8))
+            ttk.Button(button_row, text="Open State Folder", style="Secondary.TButton", command=self._open_state_folder).grid(row=0, column=1, sticky="ew", padx=(0, 8), pady=(0, 8))
+            ttk.Button(button_row, text="Backup State", style="Secondary.TButton", command=self._backup_state_snapshot).grid(row=0, column=2, sticky="ew", pady=(0, 8))
+            ttk.Button(button_row, text="Open Profiles File", style="Secondary.TButton", command=lambda: self._open_path_in_explorer(self.profile_file)).grid(row=1, column=0, sticky="ew", padx=(0, 8))
+            ttk.Button(button_row, text="Open Workspace File", style="Secondary.TButton", command=lambda: self._open_path_in_explorer(self.workspace_file)).grid(row=1, column=1, sticky="ew", padx=(0, 8))
+            ttk.Button(button_row, text="Export Activity", style="Secondary.TButton", command=self._export_activity_log).grid(row=1, column=2, sticky="ew")
 
             refresh_report()
 
@@ -5656,6 +5952,23 @@ def MAINWINDOW_REDESIGNED():
             self._update_plan_summary()
             self._schedule_workspace_save()
 
+        def _refresh_safety_status(self):
+            if not hasattr(self, "safety_status_var"):
+                return
+
+            mode = "dry run" if self.dry_run_var.get() else "live clicks"
+            fail_safe = "corner fail-safe on" if self.pyautogui_failsafe_var.get() else "corner fail-safe off"
+            cap_value = self.max_actions_var.get().strip()
+            if cap_value in ("", "0"):
+                cap = "no action cap"
+            else:
+                try:
+                    cap_number = int(cap_value)
+                    cap = f"{cap_number} action cap" if cap_number > 0 else "action cap needs attention"
+                except Exception:
+                    cap = "action cap needs attention"
+            self.safety_status_var.set(f"Safety: {mode} | {fail_safe} | {cap}")
+
         def _format_run_intelligence(self, config):
             planned_actions = config["repeat_limit"]
             if config["max_actions"] > 0:
@@ -5710,6 +6023,28 @@ def MAINWINDOW_REDESIGNED():
                 return
             self.run_intelligence_var.set(self._format_run_intelligence(config))
 
+        def _refresh_readiness_checklist(self):
+            if not hasattr(self, "readiness_var"):
+                return
+            try:
+                config = self._build_run_config()
+            except Exception as exc:
+                self.readiness_var.set(f"Readiness: fix configuration\n- Review Configuration: {exc}")
+                return
+            readiness = _build_readiness_checklist(config, (self.screen_width, self.screen_height))
+            self.readiness_var.set(_format_readiness_text(readiness))
+
+        def _refresh_profile_state(self):
+            if not hasattr(self, "profile_state_var"):
+                return
+            profile_state = _build_profile_state(
+                self.profile_name_var.get(),
+                self.profile_choice_var.get(),
+                self._collect_profile_data(),
+                self.saved_profiles,
+            )
+            self.profile_state_var.set(_format_profile_state_text(profile_state))
+
         def _validate_current_plan(self):
             try:
                 config = self._build_run_config()
@@ -5717,8 +6052,10 @@ def MAINWINDOW_REDESIGNED():
                 messagebox.showerror("Plan needs attention", str(exc), parent=self)
                 return
             summary = self._format_run_intelligence(config)
+            readiness = _build_readiness_checklist(config, (self.screen_width, self.screen_height))
             self.run_intelligence_var.set(summary)
-            self.status_var.set(f"Plan validated: {summary}")
+            self.readiness_var.set(_format_readiness_text(readiness))
+            self.status_var.set(f"Plan validated: {readiness['status']}. {summary}")
             self._append_activity("Run plan validated.")
 
         def _update_plan_summary(self, *_args):
@@ -5758,6 +6095,9 @@ def MAINWINDOW_REDESIGNED():
                 f"running as {run_shape}, capped at {runtime_limit}s, stopped by {stop_hotkey}, using {style_summary}, "
                 f"preset '{self.behaviour_preset_var.get()}', micro-pause {micro_pause_duration}s every {micro_pause_every} click(s)."
             )
+            self._refresh_safety_status()
+            self._refresh_readiness_checklist()
+            self._refresh_profile_state()
             self._refresh_run_intelligence()
 
         def _refresh_live_cursor(self):
@@ -6019,6 +6359,8 @@ def MAINWINDOW_REDESIGNED():
 
         def _finish_run(self, total_actions, elapsed, last_click_point):
             self.worker_thread = None
+            if hasattr(self, "start_button"):
+                self.start_button.configure(state=NORMAL)
             self.stop_button.configure(state=DISABLED)
             final_stop_reason = self.stop_reason
             action_label = "simulated action(s)" if self.active_run_was_dry_run else "click action(s)"
@@ -6105,6 +6447,8 @@ def MAINWINDOW_REDESIGNED():
             self.stop_reason = "running"
             self.hotkey_notified = False
             self.active_run_was_dry_run = bool(config["dry_run"])
+            if hasattr(self, "start_button"):
+                self.start_button.configure(state=DISABLED)
             self.stop_button.configure(state=NORMAL)
             self.session_var.set("Starting dry run..." if config["dry_run"] else "Starting click run...")
             if config["countdown"] > 0:
@@ -6199,8 +6543,9 @@ def MAINWINDOW_REDESIGNED():
             palette = self._theme_palette()
             window = tk.Toplevel(self)
             window.title("Window Settings")
-            window.geometry("480x470+280+160")
-            window.resizable(False, False)
+            window.geometry("620x560+280+160")
+            window.minsize(500, 420)
+            window.resizable(True, True)
             window.attributes("-topmost", True)
             window.configure(bg=palette["card_bg"])
             try:
@@ -6208,53 +6553,92 @@ def MAINWINDOW_REDESIGNED():
             except:
                 pass
 
-            body = tk.Frame(window, bg=palette["card_bg"], padx=16, pady=16)
-            body.pack(fill="both", expand=True)
-            body.columnconfigure(1, weight=1)
+            body, settings_canvas = _create_scrollable_shell(window, palette["card_bg"], min_width=560, padx=16, pady=16)
+            body.columnconfigure(0, weight=1)
 
-            tk.Label(body, text="Window Settings", bg=palette["card_bg"], fg=palette["text"], font=("Segoe UI", 12, "bold")).grid(row=0, column=0, columnspan=2, sticky="w")
-            tk.Label(body, text="Tune the main window, scroll behaviour, and desktop presence without restarting your session.", bg=palette["card_bg"], fg=palette["sub"], font=("Segoe UI", 9), wraplength=420, justify=LEFT).grid(row=1, column=0, columnspan=2, sticky="w", pady=(2, 12))
+            def on_settings_mousewheel(event):
+                if event.delta == 0:
+                    return
+                step = -1 if event.delta > 0 else 1
+                if event.state & 0x1:
+                    settings_canvas.xview_scroll(step, "units")
+                else:
+                    settings_canvas.yview_scroll(step, "units")
 
-            tk.Label(body, text="Theme", bg=palette["card_bg"], fg=palette["text"], font=("Segoe UI", 10, "bold")).grid(row=2, column=0, sticky="w", pady=(0, 6))
-            theme_combo = ttk.Combobox(body, textvariable=self.theme_var, values=("Light", "Dark", "Ocean"), state="readonly")
-            theme_combo.grid(row=2, column=1, sticky="ew", pady=(0, 6))
+            window.bind("<MouseWheel>", on_settings_mousewheel)
+
+            def make_section(row, title):
+                frame = tk.Frame(
+                    body,
+                    bg=palette["card_bg"],
+                    highlightbackground=palette["border"],
+                    highlightthickness=1,
+                    padx=14,
+                    pady=12,
+                )
+                frame.grid(row=row, column=0, sticky="ew", pady=(0, 12))
+                frame.columnconfigure(0, weight=1)
+                tk.Label(frame, text=title, bg=palette["card_bg"], fg=palette["text"], font=("Segoe UI", 11, "bold")).grid(row=0, column=0, sticky="w", pady=(0, 10))
+                return frame
+
+            tk.Label(body, text="Window Settings", bg=palette["card_bg"], fg=palette["text"], font=("Segoe UI", 13, "bold")).grid(row=0, column=0, sticky="w")
+            tk.Label(body, textvariable=self.window_summary_var, bg=palette["card_bg"], fg=palette["accent"], font=("Segoe UI", 9, "bold"), wraplength=520, justify=LEFT).grid(row=1, column=0, sticky="w", pady=(4, 14))
+
+            appearance = make_section(2, "Appearance")
+            appearance.columnconfigure(1, weight=1)
+            tk.Label(appearance, text="Theme", bg=palette["card_bg"], fg=palette["text"], font=("Segoe UI", 10, "bold")).grid(row=1, column=0, sticky="w", pady=(0, 8))
+            theme_combo = ttk.Combobox(appearance, textvariable=self.theme_var, values=("Light", "Dark", "Ocean"), state="readonly")
+            theme_combo.grid(row=1, column=1, sticky="ew", pady=(0, 8))
             theme_combo.bind("<<ComboboxSelected>>", lambda _event: self._apply_theme())
 
-            tk.Label(body, text="Window opacity", bg=palette["card_bg"], fg=palette["text"], font=("Segoe UI", 10, "bold")).grid(row=3, column=0, sticky="w", pady=(0, 6))
-            ttk.Scale(body, variable=self.window_opacity_var, from_=0.70, to=1.00, style="App.Horizontal.TScale", command=lambda _value: self._apply_window_preferences()).grid(row=3, column=1, sticky="ew", pady=(0, 6))
+            tk.Label(appearance, text="Window opacity", bg=palette["card_bg"], fg=palette["text"], font=("Segoe UI", 10, "bold")).grid(row=2, column=0, sticky="w", pady=(0, 8))
+            ttk.Scale(appearance, variable=self.window_opacity_var, from_=0.70, to=1.00, style="App.Horizontal.TScale", command=lambda _value: self._apply_window_preferences()).grid(row=2, column=1, sticky="ew", pady=(0, 8))
+            opacity_row = tk.Frame(appearance, bg=palette["card_bg"])
+            opacity_row.grid(row=3, column=0, columnspan=2, sticky="ew", pady=(0, 10))
+            for index, (label, value) in enumerate((("70%", 0.70), ("85%", 0.85), ("100%", 1.0))):
+                opacity_row.columnconfigure(index, weight=1)
+                ttk.Button(opacity_row, text=label, style="Chip.TButton", command=lambda preset=value: self._set_window_opacity_preset(preset)).grid(row=0, column=index, sticky="ew", padx=(0 if index == 0 else 6, 0))
 
-            tk.Label(body, text="UI scale", bg=palette["card_bg"], fg=palette["text"], font=("Segoe UI", 10, "bold")).grid(row=4, column=0, sticky="w", pady=(0, 10))
-            ttk.Scale(body, variable=self.ui_scale_var, from_=0.90, to=1.35, style="App.Horizontal.TScale", command=lambda _value: self._apply_window_preferences()).grid(row=4, column=1, sticky="ew", pady=(0, 10))
+            tk.Label(appearance, text="UI scale", bg=palette["card_bg"], fg=palette["text"], font=("Segoe UI", 10, "bold")).grid(row=4, column=0, sticky="w", pady=(0, 8))
+            ttk.Scale(appearance, variable=self.ui_scale_var, from_=0.90, to=1.35, style="App.Horizontal.TScale", command=lambda _value: self._apply_window_preferences()).grid(row=4, column=1, sticky="ew", pady=(0, 8))
+            scale_row = tk.Frame(appearance, bg=palette["card_bg"])
+            scale_row.grid(row=5, column=0, columnspan=2, sticky="ew")
+            for index, (label, value) in enumerate((("90%", 0.90), ("100%", 1.0), ("115%", 1.15), ("130%", 1.30))):
+                scale_row.columnconfigure(index, weight=1)
+                ttk.Button(scale_row, text=label, style="Chip.TButton", command=lambda preset=value: self._set_ui_scale_preset(preset)).grid(row=0, column=index, sticky="ew", padx=(0 if index == 0 else 6, 0))
 
-            ttk.Checkbutton(body, text="Keep window on top", variable=self.topmost_var, style="App.TCheckbutton").grid(row=5, column=0, columnspan=2, sticky="w", pady=(0, 6))
-            ttk.Checkbutton(body, text="Minimize while clicking", variable=self.minimize_on_start_var, style="App.TCheckbutton").grid(row=6, column=0, columnspan=2, sticky="w", pady=(0, 6))
-            ttk.Checkbutton(body, text="Restore after run", variable=self.restore_after_run_var, style="App.TCheckbutton").grid(row=7, column=0, columnspan=2, sticky="w", pady=(0, 6))
-            ttk.Checkbutton(body, text="Close button sends app to tray", variable=self.close_to_tray_var, style="App.TCheckbutton").grid(row=8, column=0, columnspan=2, sticky="w", pady=(0, 6))
-            ttk.Checkbutton(body, text="Remember size and position", variable=self.remember_window_geometry_var, style="App.TCheckbutton").grid(row=9, column=0, columnspan=2, sticky="w", pady=(0, 6))
-            ttk.Checkbutton(body, text="Fullscreen mode", variable=self.fullscreen_var, style="App.TCheckbutton").grid(row=10, column=0, columnspan=2, sticky="w", pady=(0, 12))
+            behavior = make_section(3, "Desktop Behavior")
+            ttk.Checkbutton(behavior, text="Keep window on top", variable=self.topmost_var, style="App.TCheckbutton").grid(row=1, column=0, sticky="w", pady=(0, 6))
+            ttk.Checkbutton(behavior, text="Minimize while clicking", variable=self.minimize_on_start_var, style="App.TCheckbutton").grid(row=2, column=0, sticky="w", pady=(0, 6))
+            ttk.Checkbutton(behavior, text="Restore after run", variable=self.restore_after_run_var, style="App.TCheckbutton").grid(row=3, column=0, sticky="w", pady=(0, 6))
+            ttk.Checkbutton(behavior, text="Close button sends app to tray", variable=self.close_to_tray_var, style="App.TCheckbutton").grid(row=4, column=0, sticky="w", pady=(0, 6))
+            ttk.Checkbutton(behavior, text="Remember size and position", variable=self.remember_window_geometry_var, style="App.TCheckbutton").grid(row=5, column=0, sticky="w", pady=(0, 6))
+            ttk.Checkbutton(behavior, text="Fullscreen mode", variable=self.fullscreen_var, style="App.TCheckbutton").grid(row=6, column=0, sticky="w")
 
-            tk.Label(body, text="Size presets", bg=palette["card_bg"], fg=palette["text"], font=("Segoe UI", 10, "bold")).grid(row=11, column=0, columnspan=2, sticky="w", pady=(0, 6))
-            preset_row = tk.Frame(body, bg=palette["card_bg"])
-            preset_row.grid(row=12, column=0, columnspan=2, sticky="ew", pady=(0, 12))
-            preset_row.columnconfigure(0, weight=1)
-            preset_row.columnconfigure(1, weight=1)
-            preset_row.columnconfigure(2, weight=1)
-            ttk.Button(preset_row, text="Compact", style="Secondary.TButton", command=lambda: self._set_window_size_preset(920, 640)).grid(row=0, column=0, sticky="ew")
-            ttk.Button(preset_row, text="Wide", style="Secondary.TButton", command=lambda: self._set_window_size_preset(1180, 760)).grid(row=0, column=1, sticky="ew", padx=8)
-            ttk.Button(preset_row, text="Studio", style="Secondary.TButton", command=lambda: self._set_window_size_preset(1360, 860)).grid(row=0, column=2, sticky="ew")
+            layout = make_section(4, "Layout Presets")
+            for index in range(3):
+                layout.columnconfigure(index, weight=1)
+            ttk.Button(layout, text="Compact", style="Secondary.TButton", command=lambda: self._set_window_size_preset(920, 640)).grid(row=1, column=0, sticky="ew")
+            ttk.Button(layout, text="Wide", style="Secondary.TButton", command=lambda: self._set_window_size_preset(1180, 760)).grid(row=1, column=1, sticky="ew", padx=8)
+            ttk.Button(layout, text="Studio", style="Secondary.TButton", command=lambda: self._set_window_size_preset(1360, 860)).grid(row=1, column=2, sticky="ew")
+            ttk.Button(layout, text="Fit to Screen", style="Secondary.TButton", command=self._fit_window_to_screen).grid(row=2, column=0, sticky="ew", pady=(8, 0))
+            ttk.Button(layout, text="Center", style="Secondary.TButton", command=self._center_window).grid(row=2, column=1, sticky="ew", padx=8, pady=(8, 0))
+            ttk.Button(layout, text="Save Current", style="Secondary.TButton", command=self._remember_current_window_layout).grid(row=2, column=2, sticky="ew", pady=(8, 0))
 
-            tk.Label(body, textvariable=self.window_summary_var, bg=palette["card_bg"], fg=palette["accent"], font=("Segoe UI", 9, "bold"), wraplength=420, justify=LEFT).grid(row=13, column=0, columnspan=2, sticky="w", pady=(0, 12))
+            support = make_section(5, "Maintenance")
+            support.columnconfigure(0, weight=1)
+            support.columnconfigure(1, weight=1)
+            ttk.Button(support, text="Reset Visuals", style="Secondary.TButton", command=self._reset_visual_preferences).grid(row=1, column=0, sticky="ew", pady=(0, 8))
+            ttk.Button(support, text="Reset Layout", style="Secondary.TButton", command=self._reset_window_layout).grid(row=1, column=1, sticky="ew", padx=(8, 0), pady=(0, 8))
+            ttk.Button(support, text="Health Check", style="Secondary.TButton", command=self._open_health_dashboard).grid(row=2, column=0, sticky="ew")
+            ttk.Button(support, text="Open State Folder", style="Secondary.TButton", command=self._open_state_folder).grid(row=2, column=1, sticky="ew", padx=(8, 0))
 
-            button_row = tk.Frame(body, bg=palette["card_bg"])
-            button_row.grid(row=14, column=0, columnspan=2, sticky="ew")
-            button_row.columnconfigure(0, weight=1)
-            button_row.columnconfigure(1, weight=1)
-            button_row.columnconfigure(2, weight=1)
-            button_row.columnconfigure(3, weight=1)
-            ttk.Button(button_row, text="Center", style="Secondary.TButton", command=self._center_window).grid(row=0, column=0, sticky="ew")
-            ttk.Button(button_row, text="Reset Layout", style="Secondary.TButton", command=self._reset_window_layout).grid(row=0, column=1, sticky="ew", padx=(8, 8))
-            ttk.Button(button_row, text="Restart Program", style="Secondary.TButton", command=self._restart_program).grid(row=0, column=2, sticky="ew", padx=(0, 8))
-            ttk.Button(button_row, text="Close", style="Secondary.TButton", command=window.destroy).grid(row=0, column=3, sticky="ew")
+            footer_row = tk.Frame(body, bg=palette["card_bg"])
+            footer_row.grid(row=6, column=0, sticky="ew")
+            footer_row.columnconfigure(0, weight=1)
+            footer_row.columnconfigure(1, weight=1)
+            ttk.Button(footer_row, text="Restart Program", style="Secondary.TButton", command=self._restart_program).grid(row=0, column=0, sticky="ew", padx=(0, 8))
+            ttk.Button(footer_row, text="Close", style="Secondary.TButton", command=window.destroy).grid(row=0, column=1, sticky="ew")
 
         def _open_sequence_builder(self):
             if not _ensure_dependencies("Coordinate Sequence", ["pyautogui"], parent=self):

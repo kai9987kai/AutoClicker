@@ -12,8 +12,13 @@ Windows desktop auto-clicker utilities built in Python with Tkinter and PyAutoGU
 ## Newer full-app highlights
 
 - V10.1 Safety Guard with optional PyAutoGUI corner fail-safe control, max action caps, run validation, and live run intelligence.
+- V10.1 command-strip safety controls with dry-run, fail-safe, validation, health, session report, and state-folder shortcuts.
+- V10.1 Support Hub in the right rail for health checks, session reports, state backups, and opening the app-data folder.
+- V10.1 run readiness checklist in Live Review with target, output, fail-safe, stop-boundary, pace, and stop-hotkey checks.
+- V10.1 Safety Guard presets for Simulation, Guarded Live, and Manual Stop Live modes.
 - V10.1 dry-run mode for simulating click runs, sequence runs, and recording playback without sending mouse clicks.
 - V10.1 session report export with recent activity, run summaries, active profile settings, and state-file paths.
+- V10.1 Start button state now reflects active click runs, making duplicate start attempts visibly unavailable.
 - V10.1 profile/workspace persistence moved to the user app-data directory with migration from legacy local files.
 - V10.1 headless state summary, state backup, recording validator, and sequence validator commands.
 - V10.1 profile import preview and profile JSON validator.
@@ -31,6 +36,7 @@ Windows desktop auto-clicker utilities built in Python with Tkinter and PyAutoGU
 - Optional micro-pause rhythm controls for long sessions to break up repetitive runs.
 - Scrollable control center with vertical and horizontal scrollbars for smaller screens and denser setups.
 - New Window Studio controls for theme switching, opacity, UI scale, size presets, fullscreen, and tray-close behaviour.
+- Window Settings now has a scrollable page with opacity presets, UI-scale presets, fit-to-screen, save-current-layout, reset-visuals, health, and state-folder shortcuts.
 - Improved theme handling with Light, Dark, and Ocean modes across the main control center.
 - Redesigned control center layout with clearer planner, tools, summary, and activity sections.
 - Saved profile import/export from JSON.
@@ -86,8 +92,10 @@ Optional tools inside the full app:
 - Recording Studio
 - Health Check
 - Safety Guard and plan validation
+- Run readiness checklist and safety presets
 - Dry-run simulation
 - Session report export
+- Support Hub state backup and app-data folder shortcuts
 - Photo clicker
 - Colour clicker
 - Recording and playback
