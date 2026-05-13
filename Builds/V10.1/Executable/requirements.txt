@@ -1,0 +1,10 @@
+pyautogui
+keyboard
+pystray
+gspread
+oauth2client
+win10toast
+colormap
+pywin32
+Pillow
+numpy
