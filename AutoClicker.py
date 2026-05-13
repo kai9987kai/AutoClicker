@@ -14,9 +14,176 @@ import json
 import random
 import math
 import platform
+import warnings
+import shutil
 
 IMPORT_ERRORS = {}
-APP_VERSION = "V10.0"
+APP_VERSION = "V10.1"
+APP_STATE_DIR_NAME = "AutoClicker"
+PROFILE_FILE_NAME = "autoclicker_profiles.json"
+WORKSPACE_FILE_NAME = "autoclicker_workspace.json"
+DEFAULT_CLICK_TYPES = {
+    "Left Click": ("left", 1),
+    "Right Click": ("right", 1),
+    "Middle Click": ("middle", 1),
+    "Double Left Click": ("left", 2),
+    "Double Right Click": ("right", 2),
+    "Double Middle Click": ("middle", 2),
+}
+PROFILE_FIELDS = {
+    "target_x",
+    "target_y",
+    "click_mode",
+    "delay",
+    "delay_variance",
+    "jitter_x",
+    "jitter_y",
+    "countdown",
+    "runtime_limit",
+    "max_actions",
+    "stop_hotkey",
+    "repeat_mode",
+    "repeat_count",
+    "behaviour_preset",
+    "micro_pause_every",
+    "micro_pause_duration",
+    "topmost",
+    "minimize_on_start",
+    "restore_after_run",
+    "close_to_tray",
+    "fullscreen",
+    "remember_window_geometry",
+    "window_opacity",
+    "ui_scale",
+    "human_like",
+    "play_sound",
+    "dry_run",
+    "pyautogui_failsafe",
+    "theme",
+}
+PROFILE_INT_FIELDS = {
+    "target_x",
+    "target_y",
+    "jitter_x",
+    "jitter_y",
+    "max_actions",
+    "micro_pause_every",
+    "repeat_count",
+}
+PROFILE_FLOAT_FIELDS = {
+    "delay",
+    "delay_variance",
+    "countdown",
+    "runtime_limit",
+    "micro_pause_duration",
+    "window_opacity",
+    "ui_scale",
+}
+PROFILE_BOOL_FIELDS = {
+    "topmost",
+    "minimize_on_start",
+    "restore_after_run",
+    "close_to_tray",
+    "fullscreen",
+    "remember_window_geometry",
+    "human_like",
+    "play_sound",
+    "dry_run",
+    "pyautogui_failsafe",
+}
+PROFILE_ENUM_FIELDS = {
+    "click_mode": set(DEFAULT_CLICK_TYPES),
+    "repeat_mode": {"Infinite", "Burst Count"},
+    "behaviour_preset": {"Balanced", "Precision", "Burst Sprint", "Human Mimic"},
+    "theme": {"Light", "Dark", "Ocean"},
+}
+
+
+def _resource_path(file_name):
+    """Resolve bundled resources from source checkouts and PyInstaller builds."""
+    bundle_root = getattr(sys, "_MEIPASS", None)
+    search_roots = [
+        bundle_root,
+        os.path.dirname(os.path.abspath(__file__)),
+        os.getcwd(),
+    ]
+    for root in search_roots:
+        if not root:
+            continue
+        candidate = os.path.join(root, file_name)
+        if os.path.exists(candidate):
+            return candidate
+    return os.path.join(os.getcwd(), file_name)
+
+
+def _state_dir():
+    state_root = os.environ.get("APPDATA") or os.environ.get("LOCALAPPDATA")
+    if state_root:
+        return os.path.join(state_root, APP_STATE_DIR_NAME)
+    return os.getcwd()
+
+
+def _state_file_location(file_name):
+    return os.path.join(_state_dir(), file_name)
+
+
+def _copy_legacy_state_file(file_name, destination):
+    legacy_path = os.path.join(os.getcwd(), file_name)
+    if os.path.abspath(legacy_path) == os.path.abspath(destination):
+        return
+    if not os.path.exists(legacy_path) or os.path.exists(destination):
+        return
+
+    try:
+        with open(legacy_path, "r", encoding="utf-8") as source_handle:
+            legacy_contents = source_handle.read()
+        with open(destination, "w", encoding="utf-8") as destination_handle:
+            destination_handle.write(legacy_contents)
+    except Exception:
+        pass
+
+
+def _state_file_path(file_name):
+    directory = _state_dir()
+    try:
+        os.makedirs(directory, exist_ok=True)
+    except Exception:
+        directory = os.getcwd()
+
+    destination = os.path.join(directory, file_name)
+    _copy_legacy_state_file(file_name, destination)
+    return destination
+
+
+def _atomic_write_json(path, payload, sort_keys=False):
+    directory = os.path.dirname(path) or os.getcwd()
+    os.makedirs(directory, exist_ok=True)
+    temp_path = f"{path}.tmp"
+    try:
+        with open(temp_path, "w", encoding="utf-8") as file_handle:
+            json.dump(payload, file_handle, indent=2, sort_keys=sort_keys)
+        os.replace(temp_path, path)
+    except Exception:
+        try:
+            if os.path.exists(temp_path):
+                os.remove(temp_path)
+        except Exception:
+            pass
+        raise
+
+
+def _format_seconds(seconds):
+    try:
+        seconds = float(seconds)
+    except Exception:
+        return "unknown"
+    if seconds < 60:
+        return f"{seconds:.2f}s"
+    minutes, remainder = divmod(int(round(seconds)), 60)
+    if minutes < 60:
+        return f"{minutes}m {remainder:02d}s"
+    hours, minutes = divmod(minutes, 60)
+    return f"{hours}h {minutes:02d}m {remainder:02d}s"
 
 try:
     import pystray
@@ -50,6 +217,449 @@ try:
     import winsound
 except ImportError:
     winsound = None
+
+
+def _collect_headless_health_data():
+    import importlib.util
+
+    dependency_names = {
+        "pyautogui": "pyautogui",
+        "keyboard": "keyboard",
+        "pystray": "pystray",
+        "Pillow": "PIL",
+        "numpy": "numpy",
+        "pywin32": "win32api",
+    }
+    dependencies = {}
+    for dependency_name, module_name in dependency_names.items():
+        if dependency_name in IMPORT_ERRORS:
+            dependencies[dependency_name] = {
+                "available": False,
+                "detail": IMPORT_ERRORS[dependency_name],
+            }
+        elif importlib.util.find_spec(module_name) is None:
+            dependencies[dependency_name] = {
+                "available": False,
+                "detail": "module not found",
+            }
+        else:
+            dependencies[dependency_name] = {
+                "available": True,
+                "detail": "available",
+            }
+
+    profile_file = _state_file_location(PROFILE_FILE_NAME)
+    workspace_file = _state_file_location(WORKSPACE_FILE_NAME)
+    return {
+        "app_version": APP_VERSION,
+        "os": f"{platform.system()} {platform.release()}",
+        "python": sys.version.split()[0],
+        "resource_root": os.path.dirname(_resource_path("favicon.ico")),
+        "dependencies": dependencies,
+        "state_files": {
+            "profiles": {
+                "path": profile_file,
+                "present": os.path.exists(profile_file),
+            },
+            "workspace": {
+                "path": workspace_file,
+                "present": os.path.exists(workspace_file),
+            },
+        },
+    }
+
+
+def _build_headless_health_report():
+    health_data = _collect_headless_health_data()
+    dependency_lines = []
+    for dependency_name, dependency_data in health_data["dependencies"].items():
+        if dependency_data["available"]:
+            dependency_lines.append(f"- {dependency_name}: available")
+        else:
+            dependency_lines.append(f"- {dependency_name}: missing ({dependency_data['detail']})")
+
+    profile_file = health_data["state_files"]["profiles"]
+    workspace_file = health_data["state_files"]["workspace"]
+    sections = [
+        "AutoClicker Health Check",
+        f"- App version: {health_data['app_version']}",
+        f"- OS: {health_data['os']}",
+        f"- Python: {health_data['python']}",
+        f"- Resource root: {health_data['resource_root']}",
+        "",
+        "Dependencies",
+        *dependency_lines,
+        "",
+        "State Files",
+        f"- Profiles file: {'present' if profile_file['present'] else 'not created yet'}",
+        f"  {profile_file['path']}",
+        f"- Workspace file: {'present' if workspace_file['present'] else 'not created yet'}",
+        f"  {workspace_file['path']}",
+    ]
+    return "\n".join(sections)
+
+
+def _build_session_report_payload(profile_data, activity_history, run_reports, state_files=None):
+    return {
+        "app_version": APP_VERSION,
+        "generated_at": datetime.datetime.now().isoformat(timespec="seconds"),
+        "platform": {
+            "os": f"{platform.system()} {platform.release()}",
+            "python": sys.version.split()[0],
+        },
+        "profile_data": dict(profile_data),
+        "activity_history": [str(entry) for entry in activity_history[-80:]],
+        "run_reports": list(run_reports[-40:]),
+        "state_files": dict(state_files or {}),
+    }
+
+
+def _file_info(path):
+    present = os.path.exists(path)
+    info = {
+        "path": path,
+        "present": present,
+        "size_bytes": 0,
+        "modified_at": None,
+    }
+    if present:
+        try:
+            stat_result = os.stat(path)
+            info["size_bytes"] = stat_result.st_size
+            info["modified_at"] = datetime.datetime.fromtimestamp(stat_result.st_mtime).isoformat(timespec="seconds")
+        except Exception as exc:
+            info["error"] = str(exc)
+    return info
+
+
+def _load_json_file(path):
+    with open(path, "r", encoding="utf-8-sig") as file_handle:
+        return json.load(file_handle)
+
+
+def _normalize_recording_points(raw_points, limit=200, strict=True):
+    if not isinstance(raw_points, list):
+        raise ValueError("Recording files must contain a list of coordinate pairs.")
+
+    cleaned_points = []
+    for index, point in enumerate(raw_points, start=1):
+        try:
+            if not isinstance(point, (list, tuple)) or len(point) != 2:
+                raise ValueError("expected [x, y]")
+            cleaned_points.append((int(point[0]), int(point[1])))
+        except Exception as exc:
+            if strict:
+                raise ValueError(f"Point {index} is invalid: {exc}") from exc
+
+    return cleaned_points[-limit:]
+
+
+def _normalize_sequence_steps(raw_steps, click_types=None):
+    click_types = click_types or DEFAULT_CLICK_TYPES
+    if not isinstance(raw_steps, list):
+        raise ValueError("Sequence files must contain a list of steps.")
+
+    normalized_steps = []
+    for index, step in enumerate(raw_steps, start=1):
+        if not isinstance(step, (list, tuple)) or len(step) != 4:
+            raise ValueError(f"Step {index} must contain X, Y, action, and delay.")
+        try:
+            x_pos = int(step[0])
+            y_pos = int(step[1])
+            action_name = str(step[2])
+            delay_seconds = float(step[3])
+        except Exception as exc:
+            raise ValueError(f"Step {index} contains values that cannot be parsed: {exc}") from exc
+        if action_name not in click_types:
+            raise ValueError(f"Step {index} uses an unknown action: {action_name}.")
+        if delay_seconds < 0:
+            raise ValueError(f"Step {index} uses a negative delay.")
+        normalized_steps.append((x_pos, y_pos, action_name, delay_seconds))
+    return normalized_steps
+
+
+def _collect_state_summary_data():
+    profile_file = _state_file_location(PROFILE_FILE_NAME)
+    workspace_file = _state_file_location(WORKSPACE_FILE_NAME)
+    summary = {
+        "app_version": APP_VERSION,
+        "state_dir": os.path.dirname(profile_file),
+        "profiles": {
+            "file": _file_info(profile_file),
+            "count": 0,
+            "error": None,
+        },
+        "workspace": {
+            "file": _file_info(workspace_file),
+            "recording_points": 0,
+            "activity_entries": 0,
+            "run_reports": 0,
+            "has_profile_data": False,
+            "error": None,
+        },
+    }
+
+    if summary["profiles"]["file"]["present"]:
+        try:
+            profile_data = _load_json_file(profile_file)
+            if isinstance(profile_data, dict):
+                summary["profiles"]["count"] = len(profile_data)
+            else:
+                summary["profiles"]["error"] = "profiles file is not a JSON object"
+        except Exception as exc:
+            summary["profiles"]["error"] = str(exc)
+
+    if summary["workspace"]["file"]["present"]:
+        try:
+            workspace_data = _load_json_file(workspace_file)
+            if isinstance(workspace_data, dict):
+                summary["workspace"]["recording_points"] = len(workspace_data.get("recording_data") or [])
+                summary["workspace"]["activity_entries"] = len(workspace_data.get("activity_history") or [])
+                summary["workspace"]["run_reports"] = len(workspace_data.get("run_reports") or [])
+                summary["workspace"]["has_profile_data"] = isinstance(workspace_data.get("profile_data"), dict)
+            else:
+                summary["workspace"]["error"] = "workspace file is not a JSON object"
+        except Exception as exc:
+            summary["workspace"]["error"] = str(exc)
+
+    return summary
+
+
+def _build_state_summary_report():
+    summary = _collect_state_summary_data()
+    profile_file = summary["profiles"]["file"]
+    workspace_file = summary["workspace"]["file"]
+    lines = [
+        "AutoClicker State Summary",
+        f"- App version: {summary['app_version']}",
+        f"- State directory: {summary['state_dir']}",
+        "",
+        "Profiles",
+        f"- File: {'present' if profile_file['present'] else 'not created yet'}",
+        f"  {profile_file['path']}",
+        f"- Saved profiles: {summary['profiles']['count']}",
+    ]
+    if summary["profiles"]["error"]:
+        lines.append(f"- Error: {summary['profiles']['error']}")
+
+    lines.extend(
+        [
+            "",
+            "Workspace",
+            f"- File: {'present' if workspace_file['present'] else 'not created yet'}",
+            f"  {workspace_file['path']}",
+            f"- Recording points: {summary['workspace']['recording_points']}",
+            f"- Activity entries: {summary['workspace']['activity_entries']}",
+            f"- Run reports: {summary['workspace']['run_reports']}",
+            f"- Current profile data: {'present' if summary['workspace']['has_profile_data'] else 'not present'}",
+        ]
+    )
+    if summary["workspace"]["error"]:
+        lines.append(f"- Error: {summary['workspace']['error']}")
+    return "\n".join(lines)
+
+
+def _backup_state_files(destination_dir=None):
+    timestamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+    if destination_dir is None:
+        destination_dir = os.path.join(_state_dir(), "backups", timestamp)
+    else:
+        destination_dir = os.path.abspath(destination_dir)
+    os.makedirs(destination_dir, exist_ok=True)
+
+    copied_files = []
+    copied_file_details = []
+    seen_sources = set()
+    for file_name in (PROFILE_FILE_NAME, WORKSPACE_FILE_NAME):
+        candidates = [
+            (_state_file_location(file_name), file_name),
+            (os.path.join(os.getcwd(), file_name), f"legacy_{file_name}"),
+        ]
+        for source_path, backup_name in candidates:
+            source_key = os.path.abspath(source_path)
+            if source_key in seen_sources or not os.path.exists(source_path):
+                continue
+            seen_sources.add(source_key)
+            destination_path = os.path.join(destination_dir, backup_name)
+            shutil.copy2(source_path, destination_path)
+            copied_files.append(destination_path)
+            copied_file_details.append(
+                {
+                    "source": source_path,
+                    "destination": destination_path,
+                    "size_bytes": os.path.getsize(destination_path),
+                }
+            )
+
+    result = {
+        "app_version": APP_VERSION,
+        "created_at": datetime.datetime.now().isoformat(timespec="seconds"),
+        "backup_dir": destination_dir,
+        "copied_files": copied_files,
+        "copied_file_details": copied_file_details,
+        "count": len(copied_files),
+    }
+    manifest_path = os.path.join(destination_dir, "manifest.json")
+    result["manifest_path"] = manifest_path
+    _atomic_write_json(
+        manifest_path,
+        {
+            **result,
+            "state_summary": _collect_state_summary_data(),
+        },
+        sort_keys=True,
+    )
+    return result
+
+
+def _validate_recording_file(file_path):
+    points = _normalize_recording_points(_load_json_file(file_path), strict=True)
+    return {
+        "valid": True,
+        "type": "recording",
+        "path": file_path,
+        "points": len(points),
+    }
+
+
+def _validate_sequence_file(file_path, click_types=None):
+    steps = _normalize_sequence_steps(_load_json_file(file_path), click_types=click_types)
+    total_wait = sum(step[3] for step in steps)
+    return {
+        "valid": True,
+        "type": "sequence",
+        "path": file_path,
+        "steps": len(steps),
+        "total_wait_seconds": round(total_wait, 3),
+    }
+
+
+def _validate_profile_data(profile_name, profile_data, click_types=None):
+    click_types = click_types or DEFAULT_CLICK_TYPES
+    enum_fields = dict(PROFILE_ENUM_FIELDS)
+    enum_fields["click_mode"] = set(click_types)
+
+    result = {
+        "name": str(profile_name),
+        "valid": True,
+        "errors": [],
+        "warnings": [],
+        "unknown_fields": [],
+    }
+
+    if not isinstance(profile_name, str) or not profile_name.strip():
+        result["errors"].append("profile name must be a non-empty string")
+    if not isinstance(profile_data, dict):
+        result["errors"].append("profile data must be a JSON object")
+        result["valid"] = False
+        return result
+
+    unknown_fields = sorted(str(field_name) for field_name in set(profile_data) - PROFILE_FIELDS)
+    result["unknown_fields"] = unknown_fields
+    if unknown_fields:
+        result["warnings"].append("unknown fields: " + ", ".join(unknown_fields))
+
+    for field_name in PROFILE_INT_FIELDS & set(profile_data):
+        try:
+            value = int(profile_data[field_name])
+        except Exception:
+            result["errors"].append(f"{field_name} must be an integer")
+            continue
+        if field_name in {"jitter_x", "jitter_y", "max_actions", "micro_pause_every", "repeat_count"} and value < 0:
+            result["errors"].append(f"{field_name} must be zero or greater")
+        if field_name == "repeat_count" and value < 1:
+            result["errors"].append("repeat_count must be at least 1")
+
+    for field_name in PROFILE_FLOAT_FIELDS & set(profile_data):
+        try:
+            value = float(profile_data[field_name])
+        except Exception:
+            result["errors"].append(f"{field_name} must be a number")
+            continue
+        if field_name in {
+            "delay",
+            "delay_variance",
+            "countdown",
+            "runtime_limit",
+            "micro_pause_duration",
+        } and value < 0:
+            result["errors"].append(f"{field_name} must be zero or greater")
+        if field_name == "window_opacity" and not 0.2 <= value <= 1.0:
+            result["warnings"].append("window_opacity is outside the normal 0.2-1.0 range")
+        if field_name == "ui_scale" and not 0.5 <= value <= 2.0:
+            result["warnings"].append("ui_scale is outside the normal 0.5-2.0 range")
+
+    for field_name in PROFILE_BOOL_FIELDS & set(profile_data):
+        if not isinstance(profile_data[field_name], bool):
+            result["warnings"].append(f"{field_name} will be interpreted as {'enabled' if bool(profile_data[field_name]) else 'disabled'}")
+
+    for field_name, allowed_values in enum_fields.items():
+        if field_name in profile_data and profile_data[field_name] not in allowed_values:
+            result["errors"].append(
+                f"{field_name} must be one of: {', '.join(sorted(allowed_values))}"
+            )
+
+    result["valid"] = not result["errors"]
+    return result
+
+
+def _preview_profile_import(imported_profiles, existing_profiles=None, click_types=None):
+    if not isinstance(imported_profiles, dict):
+        raise ValueError("Profile files must contain a JSON object of profiles.")
+
+    existing_profiles = existing_profiles or {}
+    valid_profiles = {}
+    invalid_profiles = []
+    warnings_by_profile = {}
+    overwrites = []
+    new_profiles = []
+
+    for profile_name, profile_data in imported_profiles.items():
+        validation = _validate_profile_data(profile_name, profile_data, click_types=click_types)
+        if validation["valid"]:
+            valid_profiles[profile_name] = profile_data
+            if profile_name in existing_profiles:
+                overwrites.append(profile_name)
+            else:
+                new_profiles.append(profile_name)
+            if validation["warnings"]:
+                warnings_by_profile[profile_name] = validation["warnings"]
+        else:
+            invalid_profiles.append(validation)
+
+    return {
+        "total_entries": len(imported_profiles),
+        "valid_count": len(valid_profiles),
+        "invalid_count": len(invalid_profiles),
+        "overwrite_count": len(overwrites),
+        "new_count": len(new_profiles),
+        "valid_profile_names": sorted(valid_profiles),
+        "invalid_profiles": invalid_profiles,
+        "warnings_by_profile": warnings_by_profile,
+        "overwrites": sorted(overwrites),
+        "new_profiles": sorted(new_profiles),
+        "valid_profiles": valid_profiles,
+    }
+
+
+def _validate_profiles_file(file_path, existing_profiles=None, click_types=None):
+    preview = _preview_profile_import(
+        _load_json_file(file_path),
+        existing_profiles=existing_profiles,
+        click_types=click_types,
+    )
+    preview["valid"] = preview["invalid_count"] == 0 and preview["valid_count"] > 0
+    preview["path"] = file_path
+    return preview
+
+
+def _argument_value(arguments, flag):
+    if flag not in arguments:
+        return None
+    index = arguments.index(flag)
+    if index + 1 >= len(arguments) or arguments[index + 1].startswith("--"):
+        return None
+    return arguments[index + 1]
 
 
 def _show_dependency_error(feature_name, packages, parent=None):
@@ -131,7 +741,7 @@ def Photo_Clicker():
     win.resizable(True, True)
     win.configure(bg=_BG)
     try:
-        win.iconbitmap("favicon.ico")
+        win.iconbitmap(_resource_path("favicon.ico"))
     except Exception:
         pass
 
@@ -576,7 +1186,9 @@ except:
     pass
 
 try:
-    import win10toast #This module only works on windows
+    with warnings.catch_warnings():
+        warnings.filterwarnings("ignore", message="pkg_resources is deprecated as an API.*", category=UserWarning)
+        import win10toast #This module only works on windows
 except:
     pass
 
@@ -620,7 +1232,7 @@ def Colour_Clicker():
     master.minsize(700, 700)
     master.attributes("-topmost", True)
     master.configure(bg=_BG)
-    try: master.iconbitmap('favicon.ico')
+    try: master.iconbitmap(_resource_path("favicon.ico"))
     except: pass
 
     try:
@@ -863,7 +1475,7 @@ def Photo_Clicker():
     win.resizable(True, True)
     win.configure(bg=_BG)
     try:
-        win.iconbitmap("favicon.ico")
+        win.iconbitmap(_resource_path("favicon.ico"))
     except Exception:
         pass
 
@@ -1470,7 +2082,7 @@ def Colour_Clicker():
     master.attributes("-topmost", True)
     master.configure(bg=_BG)
     try:
-        master.iconbitmap("favicon.ico")
+        master.iconbitmap(_resource_path("favicon.ico"))
     except Exception:
         pass
 
@@ -2148,7 +2760,7 @@ def feedback():
 def NOTIFICATION():
     try:
         toaster = win10toast.ToastNotifier()
-        toaster.show_toast("AutoClicker", APP_VERSION, duration=5, threaded=True, icon_path ="favicon.ico")
+        toaster.show_toast("AutoClicker", APP_VERSION, duration=5, threaded=True, icon_path=_resource_path("favicon.ico"))
         messagebox.showinfo('AutoClicker', APP_VERSION)
     except:
         messagebox.showinfo('AutoClicker', APP_VERSION)
@@ -2360,7 +2972,7 @@ left click the list""", anchor=E).place(x=350, y=220)
 
                 root.title("AutoClicker - list of coordinates")
                 try:
-                    root.iconbitmap('favicon.ico')
+                    root.iconbitmap(_resource_path("favicon.ico"))
                 
                 except:
                     pass
@@ -2382,7 +2994,7 @@ left click the list""", anchor=E).place(x=350, y=220)
                 window.title("Settings")
                 window.geometry('335x130')
                 try:
-                    window.iconbitmap('favicon.ico')
+                    window.iconbitmap(_resource_path("favicon.ico"))
                 except:
                     pass
                 window.resizable(False, False)
@@ -2501,7 +3113,7 @@ left click the list""", anchor=E).place(x=350, y=220)
         def _setup_tray(self):
             try:
                 from PIL import Image
-                image = Image.open("favicon.ico")
+                image = Image.open(_resource_path("favicon.ico"))
                 menu = (
                     item('Restore', self._restore_from_tray),
                     item('Start Clicker', self.startclick),
@@ -2724,7 +3336,7 @@ left click the list""", anchor=E).place(x=350, y=220)
         your_gui.attributes("-topmost", True)
         your_gui.title('AutoClicker')  # Set title
         try:
-            your_gui.iconbitmap('favicon.ico')
+            your_gui.iconbitmap(_resource_path("favicon.ico"))
         except:
             pass
         your_gui.resizable(False, False)
@@ -2849,7 +3461,7 @@ left click the list""", anchor=E).place(x=350, y=250)
                 cmb.current(0)
                 root.title("AutoClicker - list of coordinates")
                 try:
-                    root.iconbitmap('favicon.ico')
+                    root.iconbitmap(_resource_path("favicon.ico"))
                 except:
                     pass
                 root.resizable(False, False)
@@ -2968,7 +3580,7 @@ left click the list""", anchor=E).place(x=350, y=250)
                 window.title("Settings")
                 window.geometry('330x115')
                 try:
-                    window.iconbitmap('favicon.ico')
+                    window.iconbitmap(_resource_path("favicon.ico"))
                 except:
                     pass
                 window.resizable(False, False)
@@ -3084,7 +3696,7 @@ left click the list""", anchor=E).place(x=350, y=250)
         def _setup_tray(self):
             try:
                 from PIL import Image
-                image = Image.open("favicon.ico")
+                image = Image.open(_resource_path("favicon.ico"))
                 menu = (
                     item('Restore', self._restore_from_tray),
                     item('Start Clicker', self.startclick),
@@ -3324,7 +3936,7 @@ left click the list""", anchor=E).place(x=350, y=250)
         your_gui.attributes("-topmost", True)
         your_gui.title('AutoClicker')  # Set title
         try:
-            your_gui.iconbitmap('favicon.ico')
+            your_gui.iconbitmap(_resource_path("favicon.ico"))
         except:
             pass
         your_gui.resizable(False, False)
@@ -3336,14 +3948,7 @@ def MAINWINDOW_REDESIGNED():
     if not _ensure_dependencies("AutoClicker Control Center", ["pyautogui", "keyboard"]):
         return
     class YourGUI(tk.Tk):
-        CLICK_TYPES = {
-            "Left Click": ("left", 1),
-            "Right Click": ("right", 1),
-            "Middle Click": ("middle", 1),
-            "Double Left Click": ("left", 2),
-            "Double Right Click": ("right", 2),
-            "Double Middle Click": ("middle", 2),
-        }
+        CLICK_TYPES = DEFAULT_CLICK_TYPES
         DELAY_PRESETS = ("0.00", "0.05", "0.10", "0.25", "0.50")
 
         def __init__(self):
@@ -3366,6 +3971,7 @@ def MAINWINDOW_REDESIGNED():
             self.stop_reason = "idle"
             self.hotkey_notified = False
             self.was_minimized_for_run = False
+            self.active_run_was_dry_run = False
 
             self.target_x_var = tk.StringVar(value="0")
             self.target_y_var = tk.StringVar(value="0")
@@ -3376,12 +3982,15 @@ def MAINWINDOW_REDESIGNED():
             self.jitter_y_var = tk.StringVar(value="0")
             self.countdown_var = tk.StringVar(value="0")
             self.runtime_limit_var = tk.StringVar(value="0")
+            self.max_actions_var = tk.StringVar(value="0")
             self.stop_hotkey_var = tk.StringVar(value="esc")
             self.repeat_mode_var = tk.StringVar(value="Infinite")
             self.repeat_count_var = tk.StringVar(value="50")
             self.behaviour_preset_var = tk.StringVar(value="Balanced")
             self.micro_pause_every_var = tk.StringVar(value="0")
             self.micro_pause_duration_var = tk.StringVar(value="0.00")
+            self.dry_run_var = tk.BooleanVar(value=False)
+            self.pyautogui_failsafe_var = tk.BooleanVar(value=False)
             self.topmost_var = tk.BooleanVar(value=True)
             self.minimize_on_start_var = tk.BooleanVar(value=True)
             self.restore_after_run_var = tk.BooleanVar(value=True)
@@ -3397,15 +4006,17 @@ def MAINWINDOW_REDESIGNED():
             self.cursor_var = tk.StringVar(value="Cursor: --, --")
             self.screen_var = tk.StringVar(value=f"Screen: {self.screen_width} x {self.screen_height}")
             self.plan_var = tk.StringVar(value="")
+            self.run_intelligence_var = tk.StringVar(value="Run intelligence will appear after configuration is valid.")
             self.session_var = tk.StringVar(value="No clicks sent yet.")
             self.last_run_var = tk.StringVar(value="Idle")
             self.recording_summary_var = tk.StringVar(value="Recording: 0 point(s) | idle")
             self.window_summary_var = tk.StringVar(value="")
             self.preset_summary_var = tk.StringVar(value="")
-            self.profile_file = os.path.join(os.getcwd(), "autoclicker_profiles.json")
-            self.workspace_file = os.path.join(os.getcwd(), "autoclicker_workspace.json")
+            self.profile_file = _state_file_path(PROFILE_FILE_NAME)
+            self.workspace_file = _state_file_path(WORKSPACE_FILE_NAME)
             self.saved_profiles = {}
             self.activity_history = []
+            self.run_reports = []
             self.section_states = {}
             self.section_widgets = {}
             self._workspace_save_job = None
@@ -3454,7 +4065,7 @@ def MAINWINDOW_REDESIGNED():
             self.attributes("-topmost", True)
             self.configure(bg="#dbe7f2")
             try:
-                self.iconbitmap('favicon.ico')
+                self.iconbitmap(_resource_path("favicon.ico"))
             except:
                 pass
 
@@ -3883,13 +4494,30 @@ def MAINWINDOW_REDESIGNED():
             for index, preset in enumerate(self.DELAY_PRESETS):
                 ttk.Button(preset_bar, text=preset, style="Chip.TButton", command=lambda value=preset: self._set_delay_preset(value)).grid(row=0, column=index, padx=(0 if index == 0 else 4, 0))
 
+            safety_card, safety_body = self._create_dropdown_section(
+                left_stack,
+                "safety_guard",
+                "Safety Guard",
+                "Action caps, corner fail-safe behaviour, and plan validation.",
+            )
+            safety_card.grid(row=2, column=0, sticky="ew", pady=(12, 0))
+            safety_body.columnconfigure(1, weight=1)
+            safety_body.columnconfigure(3, weight=1)
+
+            tk.Label(safety_body, text="Max actions cap", bg="#f8fafc", fg="#0f172a", font=("Segoe UI", 10, "bold")).grid(row=0, column=0, sticky="w", pady=(0, 6))
+            ttk.Entry(safety_body, textvariable=self.max_actions_var).grid(row=0, column=1, sticky="ew", pady=(0, 6))
+            ttk.Checkbutton(safety_body, text="PyAutoGUI corner fail-safe", variable=self.pyautogui_failsafe_var, style="App.TCheckbutton").grid(row=0, column=2, columnspan=2, sticky="w", padx=(14, 0), pady=(0, 6))
+            ttk.Checkbutton(safety_body, text="Dry run, no click output", variable=self.dry_run_var, style="App.TCheckbutton").grid(row=1, column=0, columnspan=2, sticky="w", pady=(0, 6))
+            ttk.Button(safety_body, text="Validate Plan", style="Secondary.TButton", command=self._validate_current_plan).grid(row=2, column=0, sticky="ew", pady=(0, 6))
+            tk.Label(safety_body, textvariable=self.run_intelligence_var, bg="#f8fafc", fg="#475569", font=("Segoe UI", 9), wraplength=620, justify=LEFT).grid(row=2, column=1, columnspan=3, sticky="w", padx=(14, 0), pady=(0, 6))
+
             innovation_card, innovation_body = self._create_dropdown_section(
                 left_stack,
                 "innovation",
                 "Innovation Lab",
                 "Preset behaviours, jitter shaping, and fatigue-friendly pacing options.",
             )
-            innovation_card.grid(row=2, column=0, sticky="ew", pady=(12, 0))
+            innovation_card.grid(row=3, column=0, sticky="ew", pady=(12, 0))
             innovation_body.columnconfigure(1, weight=1)
             innovation_body.columnconfigure(3, weight=1)
 
@@ -3924,7 +4552,7 @@ def MAINWINDOW_REDESIGNED():
                 "Tools and Helpers",
                 "Open specialist windows only when you need them instead of keeping everything on screen.",
             )
-            tools_card.grid(row=3, column=0, sticky="ew", pady=(12, 0))
+            tools_card.grid(row=4, column=0, sticky="ew", pady=(12, 0))
             tools_body.columnconfigure(0, weight=1)
             tools_body.columnconfigure(1, weight=1)
 
@@ -3949,7 +4577,7 @@ def MAINWINDOW_REDESIGNED():
                 "Profiles and Recall",
                 "Save and reload working setups without keeping the controls visible all the time.",
             )
-            profiles_card.grid(row=4, column=0, sticky="ew", pady=(12, 0))
+            profiles_card.grid(row=5, column=0, sticky="ew", pady=(12, 0))
             profiles_body.columnconfigure(0, weight=1)
             profiles_body.columnconfigure(1, weight=1)
 
@@ -3970,7 +4598,7 @@ def MAINWINDOW_REDESIGNED():
                 "Window Studio",
                 "Desktop-focused options, visual tuning, and layout presets stay concealed until needed.",
             )
-            window_card.grid(row=5, column=0, sticky="ew", pady=(12, 0))
+            window_card.grid(row=6, column=0, sticky="ew", pady=(12, 0))
             window_body.columnconfigure(1, weight=1)
 
             tk.Label(window_body, text="Theme", bg="#f8fafc", fg="#0f172a", font=("Segoe UI", 10, "bold")).grid(row=0, column=0, sticky="w", pady=(0, 6))
@@ -4018,16 +4646,18 @@ def MAINWINDOW_REDESIGNED():
             summary_card.grid(row=0, column=0, sticky="ew")
             tk.Label(summary_body, text="Plan", bg="#f8fafc", fg="#0f172a", font=("Segoe UI", 10, "bold")).grid(row=0, column=0, sticky="w")
             tk.Label(summary_body, textvariable=self.plan_var, bg="#f8fafc", fg="#334155", font=("Segoe UI", 10), wraplength=360, justify=LEFT).grid(row=1, column=0, sticky="w", pady=(4, 8))
-            tk.Label(summary_body, text="Session", bg="#f8fafc", fg="#0f172a", font=("Segoe UI", 10, "bold")).grid(row=2, column=0, sticky="w")
-            tk.Label(summary_body, textvariable=self.session_var, bg="#f8fafc", fg="#334155", font=("Segoe UI", 10), wraplength=360, justify=LEFT).grid(row=3, column=0, sticky="w", pady=(4, 8))
-            tk.Label(summary_body, text="Last run", bg="#f8fafc", fg="#0f172a", font=("Segoe UI", 10, "bold")).grid(row=4, column=0, sticky="w")
-            tk.Label(summary_body, textvariable=self.last_run_var, bg="#f8fafc", fg="#334155", font=("Segoe UI", 10), wraplength=360, justify=LEFT).grid(row=5, column=0, sticky="w", pady=(4, 8))
+            tk.Label(summary_body, text="Run Intelligence", bg="#f8fafc", fg="#0f172a", font=("Segoe UI", 10, "bold")).grid(row=2, column=0, sticky="w")
+            tk.Label(summary_body, textvariable=self.run_intelligence_var, bg="#f8fafc", fg="#334155", font=("Segoe UI", 10), wraplength=360, justify=LEFT).grid(row=3, column=0, sticky="w", pady=(4, 8))
+            tk.Label(summary_body, text="Session", bg="#f8fafc", fg="#0f172a", font=("Segoe UI", 10, "bold")).grid(row=4, column=0, sticky="w")
+            tk.Label(summary_body, textvariable=self.session_var, bg="#f8fafc", fg="#334155", font=("Segoe UI", 10), wraplength=360, justify=LEFT).grid(row=5, column=0, sticky="w", pady=(4, 8))
+            tk.Label(summary_body, text="Last run", bg="#f8fafc", fg="#0f172a", font=("Segoe UI", 10, "bold")).grid(row=6, column=0, sticky="w")
+            tk.Label(summary_body, textvariable=self.last_run_var, bg="#f8fafc", fg="#334155", font=("Segoe UI", 10), wraplength=360, justify=LEFT).grid(row=7, column=0, sticky="w", pady=(4, 8))
             self.total_session_clicks_var = tk.StringVar(value="Total Session Clicks: 0")
             self.session_elapsed_var = tk.StringVar(value="Session Elapsed: 00:00:00")
-            tk.Label(summary_body, textvariable=self.total_session_clicks_var, bg="#f8fafc", fg="#0f766e", font=("Segoe UI", 9, "bold")).grid(row=6, column=0, sticky="w")
-            tk.Label(summary_body, textvariable=self.session_elapsed_var, bg="#f8fafc", fg="#0f766e", font=("Segoe UI", 9, "bold")).grid(row=7, column=0, sticky="w", pady=(4, 0))
-            tk.Label(summary_body, text="Preset", bg="#f8fafc", fg="#0f172a", font=("Segoe UI", 10, "bold")).grid(row=8, column=0, sticky="w", pady=(12, 0))
-            tk.Label(summary_body, textvariable=self.preset_summary_var, bg="#f8fafc", fg="#334155", font=("Segoe UI", 10), wraplength=360, justify=LEFT).grid(row=9, column=0, sticky="w", pady=(4, 0))
+            tk.Label(summary_body, textvariable=self.total_session_clicks_var, bg="#f8fafc", fg="#0f766e", font=("Segoe UI", 9, "bold")).grid(row=8, column=0, sticky="w")
+            tk.Label(summary_body, textvariable=self.session_elapsed_var, bg="#f8fafc", fg="#0f766e", font=("Segoe UI", 9, "bold")).grid(row=9, column=0, sticky="w", pady=(4, 0))
+            tk.Label(summary_body, text="Preset", bg="#f8fafc", fg="#0f172a", font=("Segoe UI", 10, "bold")).grid(row=10, column=0, sticky="w", pady=(12, 0))
+            tk.Label(summary_body, textvariable=self.preset_summary_var, bg="#f8fafc", fg="#334155", font=("Segoe UI", 10), wraplength=360, justify=LEFT).grid(row=11, column=0, sticky="w", pady=(4, 0))
 
             controls_card, controls_body = self._create_card(
                 right_stack,
@@ -4036,15 +4666,16 @@ def MAINWINDOW_REDESIGNED():
             )
             controls_card.grid(row=1, column=0, sticky="ew", pady=(12, 0))
             controls_body.columnconfigure(0, weight=1)
-            controls_body.rowconfigure(5, weight=1)
+            controls_body.rowconfigure(6, weight=1)
             ttk.Button(controls_body, text="Mini Control", style="Secondary.TButton", command=self._open_mini_control).grid(row=0, column=0, sticky="ew", pady=(0, 8))
             ttk.Button(controls_body, text="Old Style GUI", style="Secondary.TButton", command=self._open_old_window).grid(row=1, column=0, sticky="ew", pady=(0, 8))
             ttk.Button(controls_body, text="Recording Studio", style="Secondary.TButton", command=self._open_recording_studio).grid(row=2, column=0, sticky="ew", pady=(0, 8))
             ttk.Button(controls_body, text="Health Check", style="Secondary.TButton", command=self._open_health_dashboard).grid(row=3, column=0, sticky="ew", pady=(0, 8))
-            tk.Label(controls_body, text="Recent activity", bg="#f8fafc", fg="#0f172a", font=("Segoe UI", 10, "bold")).grid(row=4, column=0, sticky="w", pady=(4, 6))
+            ttk.Button(controls_body, text="Export Session Report", style="Secondary.TButton", command=self._export_session_report).grid(row=4, column=0, sticky="ew", pady=(0, 8))
+            tk.Label(controls_body, text="Recent activity", bg="#f8fafc", fg="#0f172a", font=("Segoe UI", 10, "bold")).grid(row=5, column=0, sticky="w", pady=(4, 6))
             self.activity_list = Listbox(controls_body, height=10, font=("Segoe UI", 9), bg="white", fg="#0f172a", selectbackground="#1d4ed8", activestyle="none", exportselection=False)
-            self.activity_list.grid(row=5, column=0, sticky="nsew", pady=(0, 8))
-            ttk.Button(controls_body, text="Exit", style="Secondary.TButton", command=self.EXITME).grid(row=6, column=0, sticky="ew")
+            self.activity_list.grid(row=6, column=0, sticky="nsew", pady=(0, 8))
+            ttk.Button(controls_body, text="Exit", style="Secondary.TButton", command=self.EXITME).grid(row=7, column=0, sticky="ew")
 
             footer = tk.Frame(shell, bg="#dbe7f2")
             footer.grid(row=3, column=0, sticky="ew", pady=(16, 0))
@@ -4065,6 +4696,7 @@ def MAINWINDOW_REDESIGNED():
                 self.jitter_y_var,
                 self.countdown_var,
                 self.runtime_limit_var,
+                self.max_actions_var,
                 self.stop_hotkey_var,
                 self.repeat_mode_var,
                 self.repeat_count_var,
@@ -4090,6 +4722,8 @@ def MAINWINDOW_REDESIGNED():
             for variable in (
                 self.human_like_var,
                 self.play_sound_var,
+                self.dry_run_var,
+                self.pyautogui_failsafe_var,
             ):
                 variable.trace_add("write", self._handle_state_change)
 
@@ -4119,6 +4753,7 @@ def MAINWINDOW_REDESIGNED():
             tools_menu.add_command(label='Auto Clicker Mega Spam', command=self._open_mega_spam)
             tools_menu.add_command(label='Recording Studio', command=self._open_recording_studio)
             tools_menu.add_command(label='Health Check', command=self._open_health_dashboard)
+            tools_menu.add_command(label='Export Session Report', command=self._export_session_report)
             tools_menu.add_separator()
             tools_menu.add_command(label='Window Settings', command=self._open_settings_window)
             tools_menu.add_command(label='Old Style GUI', command=self._open_old_window)
@@ -4149,6 +4784,7 @@ def MAINWINDOW_REDESIGNED():
             self.popup.add_command(label='Photo Clicker', command=Photo_Clicker)
             self.popup.add_command(label='Recording Studio', command=self._open_recording_studio)
             self.popup.add_command(label='Health Check', command=self._open_health_dashboard)
+            self.popup.add_command(label='Export Session Report', command=self._export_session_report)
             self.popup.add_separator()
             self.popup.add_command(label='Window Settings', command=self._open_settings_window)
             self.popup.add_command(label='Exit', command=self.EXITME)
@@ -4332,6 +4968,7 @@ def MAINWINDOW_REDESIGNED():
                 "jitter_y": self.jitter_y_var.get(),
                 "countdown": self.countdown_var.get(),
                 "runtime_limit": self.runtime_limit_var.get(),
+                "max_actions": self.max_actions_var.get(),
                 "stop_hotkey": self.stop_hotkey_var.get(),
                 "repeat_mode": self.repeat_mode_var.get(),
                 "repeat_count": self.repeat_count_var.get(),
@@ -4348,6 +4985,8 @@ def MAINWINDOW_REDESIGNED():
                 "ui_scale": self._normalize_ui_scale(),
                 "human_like": self.human_like_var.get(),
                 "play_sound": self.play_sound_var.get(),
+                "dry_run": self.dry_run_var.get(),
+                "pyautogui_failsafe": self.pyautogui_failsafe_var.get(),
                 "theme": self.theme_var.get(),
             }
 
@@ -4361,6 +5000,7 @@ def MAINWINDOW_REDESIGNED():
             self.jitter_y_var.set(str(profile_data.get("jitter_y", self.jitter_y_var.get())))
             self.countdown_var.set(str(profile_data.get("countdown", self.countdown_var.get())))
             self.runtime_limit_var.set(str(profile_data.get("runtime_limit", self.runtime_limit_var.get())))
+            self.max_actions_var.set(str(profile_data.get("max_actions", self.max_actions_var.get())))
             self.stop_hotkey_var.set(str(profile_data.get("stop_hotkey", self.stop_hotkey_var.get())))
             self.repeat_mode_var.set(profile_data.get("repeat_mode", self.repeat_mode_var.get()))
             self.repeat_count_var.set(str(profile_data.get("repeat_count", self.repeat_count_var.get())))
@@ -4377,6 +5017,8 @@ def MAINWINDOW_REDESIGNED():
             self.ui_scale_var.set(float(profile_data.get("ui_scale", self.ui_scale_var.get())))
             self.human_like_var.set(bool(profile_data.get("human_like", self.human_like_var.get())))
             self.play_sound_var.set(bool(profile_data.get("play_sound", self.play_sound_var.get())))
+            self.dry_run_var.set(bool(profile_data.get("dry_run", self.dry_run_var.get())))
+            self.pyautogui_failsafe_var.set(bool(profile_data.get("pyautogui_failsafe", self.pyautogui_failsafe_var.get())))
             self.theme_var.set(profile_data.get("theme", self.theme_var.get()))
             self._refresh_preset_summary()
             self._apply_theme()
@@ -4385,8 +5027,7 @@ def MAINWINDOW_REDESIGNED():
             self._update_plan_summary()
 
         def _write_profiles_to_disk(self):
-            with open(self.profile_file, "w", encoding="utf-8") as profile_handle:
-                json.dump(self.saved_profiles, profile_handle, indent=2, sort_keys=True)
+            _atomic_write_json(self.profile_file, self.saved_profiles, sort_keys=True)
 
         def _set_status_safe(self, message):
             if threading.current_thread() is threading.main_thread():
@@ -4431,11 +5072,11 @@ def MAINWINDOW_REDESIGNED():
                 "geometry": geometry,
                 "recording_data": self.recording_data[-200:],
                 "activity_history": self.activity_history[-40:],
+                "run_reports": self.run_reports[-20:],
             }
 
         def _write_workspace_to_disk(self):
-            with open(self.workspace_file, "w", encoding="utf-8") as workspace_handle:
-                json.dump(self._serialize_workspace_state(), workspace_handle, indent=2)
+            _atomic_write_json(self.workspace_file, self._serialize_workspace_state())
 
         def _schedule_workspace_save(self, *_args):
             if self._workspace_save_job is not None:
@@ -4449,16 +5090,20 @@ def MAINWINDOW_REDESIGNED():
             self._workspace_save_job = None
             try:
                 self._write_workspace_to_disk()
-            except:
-                pass
+            except Exception as exc:
+                try:
+                    if self.winfo_exists():
+                        self.status_var.set(f"Workspace save failed: {exc}")
+                        self._append_activity("Workspace save failed.")
+                except Exception:
+                    pass
 
         def _load_workspace_from_disk(self):
             if not os.path.exists(self.workspace_file):
                 return
 
             try:
-                with open(self.workspace_file, "r", encoding="utf-8") as workspace_handle:
-                    workspace_state = json.load(workspace_handle)
+                workspace_state = _load_json_file(self.workspace_file)
             except Exception as exc:
                 self.status_var.set(f"Workspace file could not be loaded: {exc}")
                 return
@@ -4472,20 +5117,17 @@ def MAINWINDOW_REDESIGNED():
 
             recording_data = workspace_state.get("recording_data")
             if isinstance(recording_data, list):
-                cleaned_points = []
-                for point in recording_data:
-                    if isinstance(point, (list, tuple)) and len(point) == 2:
-                        try:
-                            cleaned_points.append((int(point[0]), int(point[1])))
-                        except:
-                            pass
-                self.recording_data = cleaned_points[-200:]
+                self.recording_data = _normalize_recording_points(recording_data, strict=False)
 
             activity_history = workspace_state.get("activity_history")
             if isinstance(activity_history, list):
                 self.activity_history = [str(entry) for entry in activity_history[-40:]]
                 if self.activity_history:
                     self._append_activity("Previous workspace restored.")
+
+            run_reports = workspace_state.get("run_reports")
+            if isinstance(run_reports, list):
+                self.run_reports = [report for report in run_reports[-20:] if isinstance(report, dict)]
 
             geometry = workspace_state.get("geometry")
             if geometry and self.remember_window_geometry_var.get():
@@ -4512,8 +5154,7 @@ def MAINWINDOW_REDESIGNED():
             self.saved_profiles = {}
             if os.path.exists(self.profile_file):
                 try:
-                    with open(self.profile_file, "r", encoding="utf-8") as profile_handle:
-                        loaded_profiles = json.load(profile_handle)
+                    loaded_profiles = _load_json_file(self.profile_file)
                     if isinstance(loaded_profiles, dict):
                         self.saved_profiles = loaded_profiles
                 except Exception as exc:
@@ -4611,8 +5252,7 @@ def MAINWINDOW_REDESIGNED():
                 return
 
             try:
-                with open(import_path, "r", encoding="utf-8") as import_handle:
-                    imported_profiles = json.load(import_handle)
+                imported_profiles = _load_json_file(import_path)
             except Exception as exc:
                 messagebox.showerror("Import failed", f"Unable to read the selected file.\n{exc}", parent=self)
                 return
@@ -4621,15 +5261,32 @@ def MAINWINDOW_REDESIGNED():
                 messagebox.showerror("Import failed", "The selected file must contain a JSON object of profiles.", parent=self)
                 return
 
-            imported_count = 0
-            for profile_name, profile_data in imported_profiles.items():
-                if isinstance(profile_name, str) and isinstance(profile_data, dict):
-                    self.saved_profiles[profile_name] = profile_data
-                    imported_count += 1
+            try:
+                preview = _preview_profile_import(imported_profiles, self.saved_profiles, self.CLICK_TYPES)
+            except Exception as exc:
+                messagebox.showerror("Import failed", str(exc), parent=self)
+                return
 
-            if imported_count == 0:
+            if preview["valid_count"] == 0:
                 messagebox.showinfo("Import profiles", "No valid profiles were found in the selected file.", parent=self)
                 return
+
+            warnings_count = sum(len(messages) for messages in preview["warnings_by_profile"].values())
+            if preview["invalid_count"] or preview["overwrite_count"] or warnings_count:
+                summary_lines = [
+                    f"Valid profiles: {preview['valid_count']}",
+                    f"New profiles: {preview['new_count']}",
+                    f"Profiles that will overwrite existing profiles: {preview['overwrite_count']}",
+                    f"Invalid profiles that will be skipped: {preview['invalid_count']}",
+                    f"Warnings: {warnings_count}",
+                    "",
+                    "Continue importing the valid profiles?",
+                ]
+                if not messagebox.askyesno("Import preview", "\n".join(summary_lines), parent=self):
+                    self.status_var.set("Profile import cancelled after preview.")
+                    return
+
+            self.saved_profiles.update(preview["valid_profiles"])
 
             try:
                 self._write_profiles_to_disk()
@@ -4638,8 +5295,10 @@ def MAINWINDOW_REDESIGNED():
                 return
 
             self._refresh_profile_choices()
-            self.status_var.set(f"Imported {imported_count} profile(s).")
-            self._append_activity(f"Imported {imported_count} profile(s) from {os.path.basename(import_path)}.")
+            self.status_var.set(f"Imported {preview['valid_count']} profile(s).")
+            self._append_activity(
+                f"Imported {preview['valid_count']} profile(s) from {os.path.basename(import_path)}."
+            )
             self._schedule_workspace_save()
 
         def _open_path_in_explorer(self, path):
@@ -4676,6 +5335,35 @@ def MAINWINDOW_REDESIGNED():
             self.status_var.set(f"Exported activity log to {os.path.basename(export_path)}.")
             self._append_activity(f"Exported activity log to {os.path.basename(export_path)}.")
 
+        def _export_session_report(self):
+            export_path = filedialog.asksaveasfilename(
+                defaultextension=".json",
+                filetypes=[("JSON files", "*.json")],
+                initialfile="autoclicker_session_report.json",
+                parent=self,
+            )
+            if not export_path:
+                return
+
+            payload = _build_session_report_payload(
+                self._collect_profile_data(),
+                self.activity_history,
+                self.run_reports,
+                {
+                    "profiles": self.profile_file,
+                    "workspace": self.workspace_file,
+                },
+            )
+
+            try:
+                _atomic_write_json(export_path, payload, sort_keys=True)
+            except Exception as exc:
+                messagebox.showerror("Export failed", f"Unable to export the session report.\n{exc}", parent=self)
+                return
+
+            self.status_var.set(f"Exported session report to {os.path.basename(export_path)}.")
+            self._append_activity(f"Exported session report to {os.path.basename(export_path)}.")
+
         def _open_health_dashboard(self):
             window = tk.Toplevel(self)
             window.title("Health Check")
@@ -4684,7 +5372,7 @@ def MAINWINDOW_REDESIGNED():
             window.attributes("-topmost", True)
             window.configure(bg="#edf4ff")
             try:
-                window.iconbitmap('favicon.ico')
+                window.iconbitmap(_resource_path("favicon.ico"))
             except:
                 pass
 
@@ -4725,6 +5413,7 @@ def MAINWINDOW_REDESIGNED():
                     *dependency_lines,
                     "",
                     "State Files",
+                    f"- State directory: {os.path.dirname(self.profile_file)}",
                     f"- Profiles file: {'present' if profiles_exists else 'not created yet'}",
                     f"  {self.profile_file}",
                     f"- Workspace file: {'present' if workspace_exists else 'not created yet'}",
@@ -4743,6 +5432,9 @@ def MAINWINDOW_REDESIGNED():
                     f"- Geometry: {self.geometry()}",
                     f"- Theme: {self.theme_var.get()}",
                     f"- Behaviour preset: {self.behaviour_preset_var.get()}",
+                    f"- Run intelligence: {self.run_intelligence_var.get()}",
+                    f"- Max action cap: {self.max_actions_var.get()}",
+                    f"- PyAutoGUI corner fail-safe: {'enabled' if self.pyautogui_failsafe_var.get() else 'disabled'}",
                     f"- Micro-pause: {self.micro_pause_duration_var.get()}s every {self.micro_pause_every_var.get()} click(s)",
                     f"- Topmost: {'yes' if self.topmost_var.get() else 'no'}",
                     f"- Fullscreen: {'yes' if self.fullscreen_var.get() else 'no'}",
@@ -4774,7 +5466,7 @@ def MAINWINDOW_REDESIGNED():
             window.attributes("-topmost", True)
             window.configure(bg="#edf4ff")
             try:
-                window.iconbitmap('favicon.ico')
+                window.iconbitmap(_resource_path("favicon.ico"))
             except:
                 pass
 
@@ -4914,20 +5606,12 @@ def MAINWINDOW_REDESIGNED():
                     return
 
                 try:
-                    with open(file_path, "r", encoding="utf-8") as file_handle:
-                        raw_points = json.load(file_handle)
-                    if not isinstance(raw_points, list):
-                        raise ValueError("Recording files must contain a list of points.")
-                    loaded_points = []
-                    for index, point in enumerate(raw_points, start=1):
-                        if not isinstance(point, (list, tuple)) or len(point) != 2:
-                            raise ValueError(f"Point {index} must contain X and Y.")
-                        loaded_points.append((int(point[0]), int(point[1])))
+                    loaded_points = _normalize_recording_points(_load_json_file(file_path), strict=True)
                 except Exception as exc:
                     messagebox.showerror("Load failed", f"Unable to load the recording.\n{exc}", parent=window)
                     return
 
-                self.recording_data = loaded_points[-200:]
+                self.recording_data = loaded_points
                 render_points(0 if self.recording_data else None)
                 helper_var.set(f"Loaded {len(self.recording_data)} point(s) from {os.path.basename(file_path)}.")
                 self._append_activity(f"Loaded recording from {os.path.basename(file_path)}.")
@@ -4972,6 +5656,71 @@ def MAINWINDOW_REDESIGNED():
             self._update_plan_summary()
             self._schedule_workspace_save()
 
+        def _format_run_intelligence(self, config):
+            planned_actions = config["repeat_limit"]
+            if config["max_actions"] > 0:
+                if planned_actions is None:
+                    planned_actions = config["max_actions"]
+                else:
+                    planned_actions = min(planned_actions, config["max_actions"])
+
+            estimated_duration = config["countdown"]
+            if planned_actions is not None:
+                estimated_duration += max(0, planned_actions - 1) * config["delay"]
+                if config["micro_pause_every"] > 0 and config["micro_pause_duration"] > 0:
+                    pause_count = planned_actions // config["micro_pause_every"]
+                    if planned_actions > 0 and planned_actions % config["micro_pause_every"] == 0:
+                        pause_count = max(0, pause_count - 1)
+                    estimated_duration += pause_count * config["micro_pause_duration"]
+                run_shape = f"{planned_actions} action(s), about {_format_seconds(estimated_duration)}"
+            elif config["runtime_limit"] > 0:
+                run_shape = f"runtime capped at {_format_seconds(config['runtime_limit'])}"
+            else:
+                run_shape = "continuous until stopped"
+
+            if config["delay"] == 0:
+                pace = "maximum available pace"
+            else:
+                pace = f"about {1 / config['delay']:.1f} action(s)/sec"
+
+            warnings = []
+            if not (0 <= config["x"] < self.screen_width and 0 <= config["y"] < self.screen_height):
+                clamped_x = max(0, min(self.screen_width - 1, config["x"]))
+                clamped_y = max(0, min(self.screen_height - 1, config["y"]))
+                warnings.append(f"target clamps to {clamped_x}, {clamped_y}")
+            if config["delay"] == 0:
+                warnings.append("zero delay")
+            if config["dry_run"]:
+                warnings.append("dry run: no clicks will be sent")
+            if config["repeat_limit"] is None and config["runtime_limit"] == 0 and config["max_actions"] == 0:
+                warnings.append("no runtime/action cap")
+            if not config["pyautogui_failsafe"]:
+                warnings.append("corner fail-safe off")
+
+            warning_text = "; ".join(warnings) if warnings else "no immediate warnings"
+            return f"{run_shape}; {pace}; {warning_text}."
+
+        def _refresh_run_intelligence(self):
+            if not hasattr(self, "run_intelligence_var"):
+                return
+            try:
+                config = self._build_run_config()
+            except Exception as exc:
+                self.run_intelligence_var.set(f"Needs attention: {exc}")
+                return
+            self.run_intelligence_var.set(self._format_run_intelligence(config))
+
+        def _validate_current_plan(self):
+            try:
+                config = self._build_run_config()
+            except ValueError as exc:
+                messagebox.showerror("Plan needs attention", str(exc), parent=self)
+                return
+            summary = self._format_run_intelligence(config)
+            self.run_intelligence_var.set(summary)
+            self.status_var.set(f"Plan validated: {summary}")
+            self._append_activity("Run plan validated.")
+
         def _update_plan_summary(self, *_args):
             click_mode = self.click_mode_var.get()
             delay = self.delay_var.get().strip() or "0.00"
@@ -4980,6 +5729,7 @@ def MAINWINDOW_REDESIGNED():
             jitter_y = self.jitter_y_var.get().strip() or "0"
             countdown = self.countdown_var.get().strip() or "0"
             runtime_limit = self.runtime_limit_var.get().strip() or "0"
+            max_actions = self.max_actions_var.get().strip() or "0"
             stop_hotkey = self.stop_hotkey_var.get().strip() or "manual stop only"
             micro_pause_every = self.micro_pause_every_var.get().strip() or "0"
             micro_pause_duration = self.micro_pause_duration_var.get().strip() or "0.00"
@@ -4992,6 +5742,12 @@ def MAINWINDOW_REDESIGNED():
                 style_flags.append("human-like motion")
             if self.play_sound_var.get():
                 style_flags.append("finish sound")
+            if self.dry_run_var.get():
+                style_flags.append("dry run")
+            if max_actions not in ("0", ""):
+                style_flags.append(f"action cap {max_actions}")
+            if self.pyautogui_failsafe_var.get():
+                style_flags.append("corner fail-safe")
             if micro_pause_every not in ("0", "") and micro_pause_duration not in ("0", "0.00", ""):
                 style_flags.append(f"micro-pause every {micro_pause_every}")
             style_summary = ", ".join(style_flags) if style_flags else "standard run"
@@ -5002,6 +5758,7 @@ def MAINWINDOW_REDESIGNED():
                 f"running as {run_shape}, capped at {runtime_limit}s, stopped by {stop_hotkey}, using {style_summary}, "
                 f"preset '{self.behaviour_preset_var.get()}', micro-pause {micro_pause_duration}s every {micro_pause_every} click(s)."
             )
+            self._refresh_run_intelligence()
 
         def _refresh_live_cursor(self):
             try:
@@ -5021,8 +5778,9 @@ def MAINWINDOW_REDESIGNED():
                         self.status_var.set(payload)
                     elif action == "progress":
                         count, elapsed, last_point = payload
+                        action_label = "simulated action(s)" if self.active_run_was_dry_run else "click action(s)"
                         self.session_var.set(
-                            f"Active run: {count} click action(s) sent over {elapsed:.2f} second(s). "
+                            f"Active run: {count} {action_label} processed over {elapsed:.2f} second(s). "
                             f"Last point: {last_point[0]}, {last_point[1]}."
                         )
                     elif action == "finished":
@@ -5047,6 +5805,7 @@ def MAINWINDOW_REDESIGNED():
             jitter_y = int(self.jitter_y_var.get())
             countdown_seconds = float(self.countdown_var.get())
             runtime_limit_seconds = float(self.runtime_limit_var.get())
+            max_actions = int(self.max_actions_var.get())
             micro_pause_every = int(self.micro_pause_every_var.get())
             micro_pause_duration = float(self.micro_pause_duration_var.get())
             if delay_seconds < 0:
@@ -5059,6 +5818,8 @@ def MAINWINDOW_REDESIGNED():
                 raise ValueError("Countdown must be zero or greater.")
             if runtime_limit_seconds < 0:
                 raise ValueError("Runtime cap must be zero or greater.")
+            if max_actions < 0:
+                raise ValueError("Max actions cap must be zero or greater.")
             if micro_pause_every < 0:
                 raise ValueError("Micro-pause frequency must be zero or greater.")
             if micro_pause_duration < 0:
@@ -5083,6 +5844,7 @@ def MAINWINDOW_REDESIGNED():
                 "jitter_y": jitter_y,
                 "countdown": countdown_seconds,
                 "runtime_limit": runtime_limit_seconds,
+                "max_actions": max_actions,
                 "stop_hotkey": stop_hotkey,
                 "repeat_limit": repeat_limit,
                 "button": self.CLICK_TYPES[click_mode][0],
@@ -5092,6 +5854,8 @@ def MAINWINDOW_REDESIGNED():
                 "micro_pause_every": micro_pause_every,
                 "micro_pause_duration": micro_pause_duration,
                 "human_like": self.human_like_var.get(),
+                "dry_run": self.dry_run_var.get(),
+                "pyautogui_failsafe": self.pyautogui_failsafe_var.get(),
             }
 
         def _stop_requested(self, stop_hotkey):
@@ -5114,7 +5878,7 @@ def MAINWINDOW_REDESIGNED():
             return False
 
         def _click_worker(self, config):
-            pyautogui.FAILSAFE = False
+            previous_failsafe = getattr(pyautogui, "FAILSAFE", True)
             total_actions = 0
             started_at = time.perf_counter()
             last_progress_update = started_at
@@ -5138,6 +5902,11 @@ def MAINWINDOW_REDESIGNED():
                     time.sleep(sleep_slice)
                     remaining -= sleep_slice
 
+            try:
+                pyautogui.FAILSAFE = bool(config["pyautogui_failsafe"])
+            except Exception:
+                pass
+
             while not self._stop_requested(config["stop_hotkey"]):
                 elapsed_before_click = time.perf_counter() - started_at
                 if config["runtime_limit"] > 0 and elapsed_before_click >= config["runtime_limit"]:
@@ -5146,40 +5915,61 @@ def MAINWINDOW_REDESIGNED():
 
                 click_x = config["x"]
                 click_y = config["y"]
-                
-                if config["human_like"]:
-                    # Gaussian jitter for more natural distribution
-                    if config["jitter_x"] > 0:
-                        click_x += int(random.gauss(0, config["jitter_x"] / 2))
-                    if config["jitter_y"] > 0:
-                        click_y += int(random.gauss(0, config["jitter_y"] / 2))
-                    
-                    # Slight mouse move before click
-                    pyautogui.moveTo(click_x + random.randint(-2, 2), click_y + random.randint(-2, 2), duration=random.uniform(0.01, 0.05))
-                else:
-                    if config["jitter_x"] > 0:
-                        click_x += random.randint(-config["jitter_x"], config["jitter_x"])
-                    if config["jitter_y"] > 0:
-                        click_y += random.randint(-config["jitter_y"], config["jitter_y"])
 
-                click_x = max(0, min(self.screen_width - 1, click_x))
-                click_y = max(0, min(self.screen_height - 1, click_y))
-                last_click_point = (click_x, click_y)
+                try:
+                    if config["human_like"]:
+                        if config["jitter_x"] > 0:
+                            click_x += int(random.gauss(0, config["jitter_x"] / 2))
+                        if config["jitter_y"] > 0:
+                            click_y += int(random.gauss(0, config["jitter_y"] / 2))
+                        if not config["dry_run"]:
+                            pyautogui.moveTo(
+                                click_x + random.randint(-2, 2),
+                                click_y + random.randint(-2, 2),
+                                duration=random.uniform(0.01, 0.05),
+                            )
+                    else:
+                        if config["jitter_x"] > 0:
+                            click_x += random.randint(-config["jitter_x"], config["jitter_x"])
+                        if config["jitter_y"] > 0:
+                            click_y += random.randint(-config["jitter_y"], config["jitter_y"])
 
-                pyautogui.click(
-                    x=click_x,
-                    y=click_y,
-                    button=config["button"],
-                    clicks=config["clicks"],
-                    interval=random.uniform(0.01, 0.03) if config["clicks"] > 1 else 0.0,
-                )
+                    click_x = max(0, min(self.screen_width - 1, click_x))
+                    click_y = max(0, min(self.screen_height - 1, click_y))
+                    last_click_point = (click_x, click_y)
+
+                    if not config["dry_run"]:
+                        pyautogui.click(
+                            x=click_x,
+                            y=click_y,
+                            button=config["button"],
+                            clicks=config["clicks"],
+                            interval=random.uniform(0.01, 0.03) if config["clicks"] > 1 else 0.0,
+                        )
+                except Exception as exc:
+                    if exc.__class__.__name__ == "FailSafeException":
+                        self.stop_reason = "failsafe"
+                        self.ui_queue.put(("status", "PyAutoGUI corner fail-safe triggered. Run stopped."))
+                    else:
+                        self.stop_reason = "error"
+                        self.ui_queue.put(("status", f"Click error: {exc}"))
+                    break
                 total_actions += 1
-                self.session_clicks += 1
+                if not config["dry_run"]:
+                    self.session_clicks += 1
 
                 now = time.perf_counter()
                 if total_actions == 1 or now - last_progress_update >= 0.25:
                     self.ui_queue.put(("progress", (total_actions, now - started_at, last_click_point)))
                     last_progress_update = now
+
+                if (
+                    config["max_actions"] > 0
+                    and total_actions >= config["max_actions"]
+                    and (config["repeat_limit"] is None or config["max_actions"] < config["repeat_limit"])
+                ):
+                    self.stop_reason = "max_actions"
+                    break
 
                 if config["repeat_limit"] is not None and total_actions >= config["repeat_limit"]:
                     self.stop_reason = "completed"
@@ -5220,12 +6010,19 @@ def MAINWINDOW_REDESIGNED():
                     if self.stop_reason == "runtime_limit":
                         break
 
+            try:
+                pyautogui.FAILSAFE = previous_failsafe
+            except Exception:
+                pass
             elapsed = time.perf_counter() - started_at
             self.ui_queue.put(("finished", (total_actions, elapsed, last_click_point)))
 
         def _finish_run(self, total_actions, elapsed, last_click_point):
             self.worker_thread = None
             self.stop_button.configure(state=DISABLED)
+            final_stop_reason = self.stop_reason
+            action_label = "simulated action(s)" if self.active_run_was_dry_run else "click action(s)"
+            run_prefix = "Dry run" if self.active_run_was_dry_run else "Run"
 
             if self.was_minimized_for_run and self.restore_after_run_var.get():
                 try:
@@ -5242,28 +6039,52 @@ def MAINWINDOW_REDESIGNED():
                 except:
                     pass
 
-            if self.stop_reason == "completed":
-                self.status_var.set(f"Burst complete. Sent {total_actions} click action(s).")
-                self._append_activity(f"Burst finished after {total_actions} click action(s).")
-            elif self.stop_reason == "hotkey":
-                self.status_var.set(f"Stopped by hotkey after {total_actions} click action(s).")
-                self._append_activity(f"Run stopped by hotkey after {total_actions} click action(s).")
-            elif self.stop_reason == "manual":
-                self.status_var.set(f"Stopped manually after {total_actions} click action(s).")
-                self._append_activity(f"Run stopped manually after {total_actions} click action(s).")
-            elif self.stop_reason == "runtime_limit":
-                self.status_var.set(f"Runtime cap reached after {total_actions} click action(s).")
-                self._append_activity(f"Runtime cap reached after {total_actions} click action(s).")
+            if final_stop_reason == "completed":
+                self.status_var.set(f"{run_prefix} complete. Processed {total_actions} {action_label}.")
+                self._append_activity(f"{run_prefix} finished after {total_actions} {action_label}.")
+            elif final_stop_reason == "hotkey":
+                self.status_var.set(f"{run_prefix} stopped by hotkey after {total_actions} {action_label}.")
+                self._append_activity(f"{run_prefix} stopped by hotkey after {total_actions} {action_label}.")
+            elif final_stop_reason == "manual":
+                self.status_var.set(f"{run_prefix} stopped manually after {total_actions} {action_label}.")
+                self._append_activity(f"{run_prefix} stopped manually after {total_actions} {action_label}.")
+            elif final_stop_reason == "runtime_limit":
+                self.status_var.set(f"Runtime cap reached after {total_actions} {action_label}.")
+                self._append_activity(f"Runtime cap reached after {total_actions} {action_label}.")
+            elif final_stop_reason == "max_actions":
+                self.status_var.set(f"Max action cap reached after {total_actions} {action_label}.")
+                self._append_activity(f"Max action cap reached after {total_actions} {action_label}.")
+            elif final_stop_reason == "failsafe":
+                self.status_var.set(f"Corner fail-safe stopped the run after {total_actions} {action_label}.")
+                self._append_activity(f"Corner fail-safe stopped the run after {total_actions} {action_label}.")
+            elif final_stop_reason == "error":
+                self.status_var.set(f"{run_prefix} stopped after an automation error at {total_actions} {action_label}.")
+                self._append_activity(f"{run_prefix} stopped after an automation error at {total_actions} {action_label}.")
             else:
-                self.status_var.set(f"Run finished after {total_actions} click action(s).")
-                self._append_activity(f"Run finished after {total_actions} click action(s).")
+                self.status_var.set(f"{run_prefix} finished after {total_actions} {action_label}.")
+                self._append_activity(f"{run_prefix} finished after {total_actions} {action_label}.")
 
-            self.session_var.set(f"Last session: {total_actions} click action(s) across {elapsed:.2f} second(s).")
+            self.session_var.set(f"Last session: {total_actions} {action_label} across {elapsed:.2f} second(s).")
             self.last_run_var.set(
-                f"{self.click_mode_var.get()} at ({self.target_x_var.get()}, {self.target_y_var.get()}) "
+                f"{run_prefix}: {self.click_mode_var.get()} at ({self.target_x_var.get()}, {self.target_y_var.get()}) "
                 f"for {elapsed:.2f}s, resulting in {total_actions} action(s). Last point: {last_click_point[0]}, {last_click_point[1]}."
             )
+            self.run_reports.append(
+                {
+                    "finished_at": datetime.datetime.now().isoformat(timespec="seconds"),
+                    "dry_run": self.active_run_was_dry_run,
+                    "stop_reason": final_stop_reason,
+                    "actions": total_actions,
+                    "elapsed_seconds": round(elapsed, 3),
+                    "last_point": [int(last_click_point[0]), int(last_click_point[1])],
+                    "click_mode": self.click_mode_var.get(),
+                    "target": [self.target_x_var.get(), self.target_y_var.get()],
+                    "run_intelligence": self.run_intelligence_var.get(),
+                }
+            )
+            self.run_reports = self.run_reports[-40:]
             self.stop_reason = "idle"
+            self.active_run_was_dry_run = False
             self._schedule_workspace_save()
 
         def startclick(self):
@@ -5283,14 +6104,15 @@ def MAINWINDOW_REDESIGNED():
             self.stop_event.clear()
             self.stop_reason = "running"
             self.hotkey_notified = False
+            self.active_run_was_dry_run = bool(config["dry_run"])
             self.stop_button.configure(state=NORMAL)
-            self.session_var.set("Starting click run...")
+            self.session_var.set("Starting dry run..." if config["dry_run"] else "Starting click run...")
             if config["countdown"] > 0:
                 self.status_var.set(f"Countdown armed for {config['countdown']:.2f}s. Use Stop or the configured hotkey to cancel.")
             else:
-                self.status_var.set("Run started. Use Stop or the configured hotkey to end it.")
+                self.status_var.set("Dry run started. No clicks will be sent." if config["dry_run"] else "Run started. Use Stop or the configured hotkey to end it.")
             self._append_activity(
-                f"Run started at {config['x']}, {config['y']} using {config['click_mode']}."
+                f"{'Dry run' if config['dry_run'] else 'Run'} started at {config['x']}, {config['y']} using {config['click_mode']}."
             )
 
             self.worker_thread = threading.Thread(target=self._click_worker, args=(config,), daemon=True)
@@ -5382,7 +6204,7 @@ def MAINWINDOW_REDESIGNED():
             window.attributes("-topmost", True)
             window.configure(bg=palette["card_bg"])
             try:
-                window.iconbitmap('favicon.ico')
+                window.iconbitmap(_resource_path("favicon.ico"))
             except:
                 pass
 
@@ -5445,7 +6267,7 @@ def MAINWINDOW_REDESIGNED():
             window.attributes("-topmost", True)
             window.configure(bg="#edf4ff")
             try:
-                window.iconbitmap('favicon.ico')
+                window.iconbitmap(_resource_path("favicon.ico"))
             except:
                 pass
 
@@ -5471,27 +6293,7 @@ def MAINWINDOW_REDESIGNED():
             tk.Label(body, textvariable=summary_var, bg="#edf4ff", fg="#0f766e", font=("Segoe UI", 9, "bold")).grid(row=3, column=0, columnspan=2, sticky="w", pady=(0, 10))
 
             def normalize_steps(raw_steps):
-                if not isinstance(raw_steps, list):
-                    raise ValueError("Sequence files must contain a list of steps.")
-
-                normalized_steps = []
-                for index, step in enumerate(raw_steps, start=1):
-                    if not isinstance(step, (list, tuple)) or len(step) != 4:
-                        raise ValueError(f"Step {index} must contain X, Y, action, and delay.")
-
-                    x_pos = int(step[0])
-                    y_pos = int(step[1])
-                    action_name = str(step[2])
-                    delay_seconds = float(step[3])
-
-                    if action_name not in self.CLICK_TYPES:
-                        raise ValueError(f"Step {index} uses an unknown action: {action_name}.")
-                    if delay_seconds < 0:
-                        raise ValueError(f"Step {index} uses a negative delay.")
-
-                    normalized_steps.append((x_pos, y_pos, action_name, delay_seconds))
-
-                return normalized_steps
+                return _normalize_sequence_steps(raw_steps, self.CLICK_TYPES)
 
             def selected_index():
                 selection = list_box.curselection()
@@ -5668,8 +6470,7 @@ def MAINWINDOW_REDESIGNED():
                     return
 
                 try:
-                    with open(file_path, "r", encoding="utf-8") as file_handle:
-                        normalized_steps = normalize_steps(json.load(file_handle))
+                    normalized_steps = normalize_steps(_load_json_file(file_path))
                 except Exception as exc:
                     messagebox.showerror("Load failed", f"Unable to load the sequence.\n{exc}", parent=window)
                     return
@@ -5769,10 +6570,11 @@ def MAINWINDOW_REDESIGNED():
             self.stop_event.clear()
             self.is_playing = True
             threading.Thread(target=self._playback_worker, daemon=True).start()
-            self._append_activity(f"Playback started for {len(self.recording_data)} recorded point(s).")
+            self._append_activity(f"{'Playback simulation' if self.dry_run_var.get() else 'Playback'} started for {len(self.recording_data)} recorded point(s).")
 
         def _playback_worker(self):
-            self._set_status_safe(f"Playing back {len(self.recording_data)} points...")
+            dry_run = bool(self.dry_run_var.get())
+            self._set_status_safe(f"{'Simulating playback for' if dry_run else 'Playing back'} {len(self.recording_data)} points...")
             try:
                 delay = float(self.delay_var.get())
             except:
@@ -5781,9 +6583,10 @@ def MAINWINDOW_REDESIGNED():
             for i, (x, y) in enumerate(self.recording_data):
                 if self.stop_event.is_set():
                     break
-                pyautogui.click(x=x, y=y)
-                self.session_clicks += 1
-                self._set_status_safe(f"Playback: {i+1}/{len(self.recording_data)}")
+                if not dry_run:
+                    pyautogui.click(x=x, y=y)
+                    self.session_clicks += 1
+                self._set_status_safe(f"{'Playback simulation' if dry_run else 'Playback'}: {i+1}/{len(self.recording_data)}")
                 time.sleep(delay)
             
             self.is_playing = False
@@ -5791,8 +6594,8 @@ def MAINWINDOW_REDESIGNED():
                 self._set_status_safe("Playback stopped.")
                 self._append_activity("Playback stopped before completion.")
             else:
-                self._set_status_safe("Playback finished.")
-                self._append_activity(f"Playback finished after {len(self.recording_data)} point(s).")
+                self._set_status_safe("Playback simulation finished." if dry_run else "Playback finished.")
+                self._append_activity(f"{'Playback simulation' if dry_run else 'Playback'} finished after {len(self.recording_data)} point(s).")
             if self.play_sound_var.get() and winsound:
                 winsound.Beep(1200, 200)
             self.stop_event.clear()
@@ -5825,7 +6628,7 @@ def MAINWINDOW_REDESIGNED():
             window.attributes("-topmost", True)
             window.configure(bg=palette["alt_bg"])
             try:
-                window.iconbitmap('favicon.ico')
+                window.iconbitmap(_resource_path("favicon.ico"))
             except:
                 pass
 
@@ -6057,20 +6860,12 @@ def MAINWINDOW_REDESIGNED():
                     return
 
                 try:
-                    with open(file_path, "r", encoding="utf-8") as file_handle:
-                        raw_points = json.load(file_handle)
-                    if not isinstance(raw_points, list):
-                        raise ValueError("Recording files must contain a list of points.")
-                    loaded_points = []
-                    for index, point in enumerate(raw_points, start=1):
-                        if not isinstance(point, (list, tuple)) or len(point) != 2:
-                            raise ValueError(f"Point {index} must contain X and Y.")
-                        loaded_points.append((int(point[0]), int(point[1])))
+                    loaded_points = _normalize_recording_points(_load_json_file(file_path), strict=True)
                 except Exception as exc:
                     messagebox.showerror("Load failed", f"Unable to load the recording.\n{exc}", parent=window)
                     return
 
-                self.recording_data = loaded_points[-200:]
+                self.recording_data = loaded_points
                 render_points(0 if self.recording_data else None)
                 helper_var.set(f"Loaded {len(self.recording_data)} point(s) from {os.path.basename(file_path)}.")
                 self._append_activity(f"Loaded recording from {os.path.basename(file_path)}.")
@@ -6128,7 +6923,7 @@ def MAINWINDOW_REDESIGNED():
             window.attributes("-topmost", True)
             window.configure(bg=palette["alt_bg"])
             try:
-                window.iconbitmap('favicon.ico')
+                window.iconbitmap(_resource_path("favicon.ico"))
             except:
                 pass
 
@@ -6182,23 +6977,7 @@ def MAINWINDOW_REDESIGNED():
             tk.Label(body, textvariable=summary_var, bg=palette["alt_bg"], fg=palette["accent"], font=("Segoe UI", 9, "bold")).grid(row=3, column=0, sticky="w", pady=(8, 12))
 
             def normalize_steps(raw_steps):
-                if not isinstance(raw_steps, list):
-                    raise ValueError("Sequence files must contain a list of steps.")
-
-                normalized_steps = []
-                for index, step in enumerate(raw_steps, start=1):
-                    if not isinstance(step, (list, tuple)) or len(step) != 4:
-                        raise ValueError(f"Step {index} must contain X, Y, action, and delay.")
-                    x_pos = int(step[0])
-                    y_pos = int(step[1])
-                    action_name = str(step[2])
-                    delay_seconds = float(step[3])
-                    if action_name not in self.CLICK_TYPES:
-                        raise ValueError(f"Step {index} uses an unknown action: {action_name}.")
-                    if delay_seconds < 0:
-                        raise ValueError(f"Step {index} uses a negative delay.")
-                    normalized_steps.append((x_pos, y_pos, action_name, delay_seconds))
-                return normalized_steps
+                return _normalize_sequence_steps(raw_steps, self.CLICK_TYPES)
 
             def selected_index():
                 selection = list_box.curselection()
@@ -6338,10 +7117,11 @@ def MAINWINDOW_REDESIGNED():
                 render_steps()
                 helper_var.set("Sequence cleared.")
 
-            def run_sequence_worker(sequence_copy, loop_count, countdown_seconds):
+            def run_sequence_worker(sequence_copy, loop_count, countdown_seconds, dry_run):
                 completed_steps = 0
+                previous_failsafe = getattr(pyautogui, "FAILSAFE", True)
                 try:
-                    pyautogui.FAILSAFE = False
+                    pyautogui.FAILSAFE = bool(self.pyautogui_failsafe_var.get())
                     if countdown_seconds > 0:
                         target_time = time.perf_counter() + countdown_seconds
                         last_announced = None
@@ -6364,7 +7144,17 @@ def MAINWINDOW_REDESIGNED():
                                 self._append_activity(f"Sequence stopped after {completed_steps} step(s).")
                                 return
                             button_name, click_count = self.CLICK_TYPES[action_name]
-                            pyautogui.click(x=x_pos, y=y_pos, button=button_name, clicks=click_count, interval=0.02 if click_count > 1 else 0.0)
+                            if not dry_run:
+                                try:
+                                    pyautogui.click(x=x_pos, y=y_pos, button=button_name, clicks=click_count, interval=0.02 if click_count > 1 else 0.0)
+                                except Exception as exc:
+                                    if exc.__class__.__name__ == "FailSafeException":
+                                        self.ui_queue.put(("status", f"Corner fail-safe stopped the sequence after {completed_steps} step(s)."))
+                                        self._append_activity(f"Corner fail-safe stopped the sequence after {completed_steps} step(s).")
+                                    else:
+                                        self.ui_queue.put(("status", f"Sequence click error: {exc}"))
+                                        self._append_activity(f"Sequence click error: {exc}")
+                                    return
                             completed_steps += 1
                             if delay_seconds > 0:
                                 wake_at = time.perf_counter() + delay_seconds
@@ -6375,12 +7165,16 @@ def MAINWINDOW_REDESIGNED():
                                         return
                                     time.sleep(min(0.02, wake_at - time.perf_counter()))
                         self.ui_queue.put(("status", f"Sequence loop {loop_index + 1}/{loop_count} complete."))
-                    self.ui_queue.put(("status", f"Coordinate sequence complete. Ran {completed_steps} step(s)."))
-                    self._append_activity(f"Sequence complete. Ran {completed_steps} step(s).")
+                    self.ui_queue.put(("status", f"{'Dry-run sequence' if dry_run else 'Coordinate sequence'} complete. Ran {completed_steps} step(s)."))
+                    self._append_activity(f"{'Dry-run sequence' if dry_run else 'Sequence'} complete. Ran {completed_steps} step(s).")
                 except Exception as exc:
                     self.ui_queue.put(("status", f"Sequence error: {exc}"))
                     self._append_activity(f"Sequence error: {exc}")
                 finally:
+                    try:
+                        pyautogui.FAILSAFE = previous_failsafe
+                    except Exception:
+                        pass
                     self.sequence_thread = None
                     self.stop_event.clear()
 
@@ -6421,11 +7215,16 @@ def MAINWINDOW_REDESIGNED():
                     start_label = "from the beginning"
 
                 self.stop_event.clear()
-                self.status_var.set(f"Running coordinate sequence {start_label} with {len(sequence_copy)} step(s).")
-                self._append_activity(f"Sequence started {start_label} with {len(sequence_copy)} step(s) across {loop_count} loop(s).")
+                dry_run = bool(self.dry_run_var.get())
+                self.status_var.set(
+                    f"{'Simulating' if dry_run else 'Running'} coordinate sequence {start_label} with {len(sequence_copy)} step(s)."
+                )
+                self._append_activity(
+                    f"{'Dry-run sequence' if dry_run else 'Sequence'} started {start_label} with {len(sequence_copy)} step(s) across {loop_count} loop(s)."
+                )
                 self.sequence_thread = threading.Thread(
                     target=run_sequence_worker,
-                    args=(sequence_copy, loop_count, countdown_seconds),
+                    args=(sequence_copy, loop_count, countdown_seconds, dry_run),
                     daemon=True,
                 )
                 self.sequence_thread.start()
@@ -6450,8 +7249,7 @@ def MAINWINDOW_REDESIGNED():
                 if not file_path:
                     return
                 try:
-                    with open(file_path, "r", encoding="utf-8") as file_handle:
-                        normalized_steps = normalize_steps(json.load(file_handle))
+                    normalized_steps = normalize_steps(_load_json_file(file_path))
                 except Exception as exc:
                     messagebox.showerror("Load failed", f"Unable to load the sequence.\n{exc}", parent=window)
                     return
@@ -6545,7 +7343,7 @@ def MAINWINDOW_REDESIGNED():
         def _setup_tray(self):
             try:
                 from PIL import Image
-                image = Image.open("favicon.ico")
+                image = Image.open(_resource_path("favicon.ico"))
                 menu = (
                     item('Restore', self._restore_from_tray),
                     item('Start Clicker', self.startclick),
@@ -6601,6 +7399,121 @@ def MAINWINDOW_REDESIGNED():
     time.sleep(0)
 
 if __name__ == '__main__':
+    cli_args = sys.argv[1:]
+
+    if "--state-json" in cli_args or ("--state-summary" in cli_args and "--json" in cli_args):
+        print(json.dumps(_collect_state_summary_data(), indent=2, sort_keys=True))
+        raise SystemExit(0)
+    if "--state-summary" in cli_args:
+        print(_build_state_summary_report())
+        raise SystemExit(0)
+    if "--backup-state" in cli_args:
+        backup_target = _argument_value(cli_args, "--backup-state")
+        backup_result = _backup_state_files(backup_target)
+        if "--json" in cli_args:
+            print(json.dumps(backup_result, indent=2, sort_keys=True))
+        else:
+            print(f"State backup directory: {backup_result['backup_dir']}")
+            print(f"Copied files: {backup_result['count']}")
+            for copied_file in backup_result["copied_files"]:
+                print(f"- {copied_file}")
+        raise SystemExit(0)
+    if "--validate-recording" in cli_args:
+        recording_path = _argument_value(cli_args, "--validate-recording")
+        if not recording_path:
+            print("--validate-recording requires a JSON file path.", file=sys.stderr)
+            raise SystemExit(2)
+        try:
+            validation_result = _validate_recording_file(recording_path)
+        except Exception as exc:
+            validation_result = {"valid": False, "type": "recording", "path": recording_path, "error": str(exc)}
+            if "--json" not in cli_args:
+                print(f"Recording invalid: {exc}", file=sys.stderr)
+            else:
+                print(json.dumps(validation_result, indent=2, sort_keys=True))
+            raise SystemExit(1)
+        if "--json" in cli_args:
+            print(json.dumps(validation_result, indent=2, sort_keys=True))
+        else:
+            print(f"Recording valid: {validation_result['points']} point(s).")
+        raise SystemExit(0)
+    if "--validate-sequence" in cli_args:
+        sequence_path = _argument_value(cli_args, "--validate-sequence")
+        if not sequence_path:
+            print("--validate-sequence requires a JSON file path.", file=sys.stderr)
+            raise SystemExit(2)
+        try:
+            validation_result = _validate_sequence_file(sequence_path)
+        except Exception as exc:
+            validation_result = {"valid": False, "type": "sequence", "path": sequence_path, "error": str(exc)}
+            if "--json" not in cli_args:
+                print(f"Sequence invalid: {exc}", file=sys.stderr)
+            else:
+                print(json.dumps(validation_result, indent=2, sort_keys=True))
+            raise SystemExit(1)
+        if "--json" in cli_args:
+            print(json.dumps(validation_result, indent=2, sort_keys=True))
+        else:
+            print(
+                f"Sequence valid: {validation_result['steps']} step(s), "
+                f"{validation_result['total_wait_seconds']:.3f}s total wait."
+            )
+        raise SystemExit(0)
+    if "--validate-profiles" in cli_args or "--profile-import-preview" in cli_args:
+        profile_flag = "--profile-import-preview" if "--profile-import-preview" in cli_args else "--validate-profiles"
+        profiles_path = _argument_value(cli_args, profile_flag)
+        if not profiles_path:
+            print(f"{profile_flag} requires a JSON file path.", file=sys.stderr)
+            raise SystemExit(2)
+        existing_profiles = None
+        if profile_flag == "--profile-import-preview":
+            existing_profile_path = _state_file_location(PROFILE_FILE_NAME)
+            if os.path.exists(existing_profile_path):
+                try:
+                    loaded_existing_profiles = _load_json_file(existing_profile_path)
+                    if isinstance(loaded_existing_profiles, dict):
+                        existing_profiles = loaded_existing_profiles
+                except Exception:
+                    existing_profiles = None
+        try:
+            validation_result = _validate_profiles_file(
+                profiles_path,
+                existing_profiles=existing_profiles,
+            )
+        except Exception as exc:
+            validation_result = {
+                "valid": False,
+                "type": "profiles",
+                "path": profiles_path,
+                "mode": profile_flag.lstrip("-"),
+                "error": str(exc),
+            }
+            if "--json" in cli_args:
+                print(json.dumps(validation_result, indent=2, sort_keys=True))
+            else:
+                print(f"Profiles invalid: {exc}", file=sys.stderr)
+            raise SystemExit(1)
+        validation_result["type"] = "profiles"
+        validation_result["mode"] = profile_flag.lstrip("-")
+        if "--json" in cli_args:
+            print(json.dumps(validation_result, indent=2, sort_keys=True))
+        else:
+            print(
+                f"Profiles {'valid' if validation_result['valid'] else 'need attention'}: "
+                f"{validation_result['valid_count']} valid, "
+                f"{validation_result['invalid_count']} invalid, "
+                f"{validation_result['overwrite_count']} overwrite(s)."
+            )
+            if validation_result["invalid_count"]:
+                for invalid_profile in validation_result["invalid_profiles"]:
+                    print(f"- {invalid_profile['name']}: {'; '.join(invalid_profile['errors'])}")
+        raise SystemExit(0 if validation_result["valid"] else 1)
+    if "--health-json" in cli_args or ("--health-check" in cli_args and "--json" in cli_args):
+        print(json.dumps(_collect_headless_health_data(), indent=2, sort_keys=True))
+        raise SystemExit(0)
+    if any(argument in ("--health-check", "--health") for argument in cli_args):
+        print(_build_headless_health_report())
+        raise SystemExit(0)
     MAINWINDOW_REDESIGNED()
 
 

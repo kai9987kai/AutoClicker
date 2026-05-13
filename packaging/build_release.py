@@ -6,7 +6,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-VERSION = "V10.0"
+VERSION = "V10.1"
 ROOT = Path(__file__).resolve().parents[1]
 BUILD_ROOT = ROOT / "Builds" / VERSION
 EXECUTABLE_DIR = BUILD_ROOT / "Executable"
@@ -21,7 +21,6 @@ ICON_PATH = ROOT / "favicon.ico"
 
 ROOT_PAYLOAD_FILES = (
     ROOT / "favicon.ico",
-    ROOT / "creds.json",
     ROOT / "README.md",
     ROOT / "LICENSE",
     ROOT / "requirements.txt",
@@ -115,8 +114,6 @@ def build_installer() -> None:
         add_data_argument(EXECUTABLE_DIR / "AutoClickerLite.exe", "payload"),
         "--add-data",
         add_data_argument(ROOT / "favicon.ico", "payload"),
-        "--add-data",
-        add_data_argument(ROOT / "creds.json", "payload"),
         "--add-data",
         add_data_argument(ROOT / "README.md", "payload"),
         "--add-data",

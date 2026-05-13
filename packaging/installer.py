@@ -7,12 +7,11 @@ from pathlib import Path
 from tkinter import filedialog, messagebox
 
 APP_NAME = "AutoClicker"
-VERSION = "V10.0"
+VERSION = "V10.1"
 PAYLOAD_FILES = (
     "AutoClicker.exe",
     "AutoClickerLite.exe",
     "favicon.ico",
-    "creds.json",
     "README.md",
     "LICENSE",
     "requirements.txt",

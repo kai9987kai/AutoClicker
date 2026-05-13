@@ -11,6 +11,15 @@ Windows desktop auto-clicker utilities built in Python with Tkinter and PyAutoGU
 
 ## Newer full-app highlights
 
+- V10.1 Safety Guard with optional PyAutoGUI corner fail-safe control, max action caps, run validation, and live run intelligence.
+- V10.1 dry-run mode for simulating click runs, sequence runs, and recording playback without sending mouse clicks.
+- V10.1 session report export with recent activity, run summaries, active profile settings, and state-file paths.
+- V10.1 profile/workspace persistence moved to the user app-data directory with migration from legacy local files.
+- V10.1 headless state summary, state backup, recording validator, and sequence validator commands.
+- V10.1 profile import preview and profile JSON validator.
+- V10.1 state backup manifests for support-friendly backup folders.
+- V10.1 headless health check via `python AutoClicker.py --health-check` or `python AutoClicker.py --health-json` for support and packaging verification.
+- V10.1 release packaging no longer bundles `creds.json`.
 - V10 scroll-first tool windows for Photo Clicker, Colour Clicker, Recording Studio, and Sequence Builder so every control stays reachable on smaller screens.
 - New photo presets, click offsets, settle delay, cursor-focused region tools, and match chime support in Photo Clicker.
 - New colour presets, recent swatches, max-click caps, cursor-focused scan regions, and safer pipette hotkey cleanup in Colour Clicker.
@@ -76,6 +85,9 @@ Optional tools inside the full app:
 - Coordinate sequence builder
 - Recording Studio
 - Health Check
+- Safety Guard and plan validation
+- Dry-run simulation
+- Session report export
 - Photo clicker
 - Colour clicker
 - Recording and playback
@@ -88,7 +100,24 @@ Optional tools inside the full app:
 - `autoclicker_workspace.json`
   Restored workspace state for the full app.
 
-These files are ignored by git.
+New V10.1 runs store these files under the user app-data directory, usually `%APPDATA%\AutoClicker`.
+If older copies exist beside the script, the app copies them forward on first launch. The legacy local filenames remain ignored by git.
+
+## Headless support commands
+
+```bash
+python AutoClicker.py --health-check
+python AutoClicker.py --health-json
+python AutoClicker.py --state-summary
+python AutoClicker.py --state-json
+python AutoClicker.py --backup-state
+python AutoClicker.py --validate-profiles path/to/profiles.json
+python AutoClicker.py --profile-import-preview path/to/profiles.json
+python AutoClicker.py --validate-recording path/to/recording.json
+python AutoClicker.py --validate-sequence path/to/sequence.json
+```
+
+These print dependency, version, resource, state-file, backup, and validator information without opening the Tkinter UI. JSON forms are meant for scripts and support bundles.
 
 ## Dependencies
 
