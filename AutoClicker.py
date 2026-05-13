@@ -663,6 +663,61 @@ def _backup_state_files(destination_dir=None):
     return result
 
 
+def _build_support_bundle(destination_dir=None, profile_data=None, activity_history=None, run_reports=None, state_files=None):
+    timestamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+    if destination_dir is None:
+        destination_dir = os.path.join(_state_dir(), "support-bundles", timestamp)
+    else:
+        destination_dir = os.path.abspath(destination_dir)
+    os.makedirs(destination_dir, exist_ok=True)
+
+    files = {}
+    health_path = os.path.join(destination_dir, "health_report.txt")
+    with open(health_path, "w", encoding="utf-8") as file_handle:
+        file_handle.write(_build_headless_health_report())
+    files["health_report"] = health_path
+
+    state_summary_path = os.path.join(destination_dir, "state_summary.json")
+    _atomic_write_json(state_summary_path, _collect_state_summary_data(), sort_keys=True)
+    files["state_summary"] = state_summary_path
+
+    state_summary_text_path = os.path.join(destination_dir, "state_summary.txt")
+    with open(state_summary_text_path, "w", encoding="utf-8") as file_handle:
+        file_handle.write(_build_state_summary_report())
+    files["state_summary_text"] = state_summary_text_path
+
+    session_report_path = os.path.join(destination_dir, "session_report.json")
+    _atomic_write_json(
+        session_report_path,
+        _build_session_report_payload(
+            profile_data or {},
+            activity_history or [],
+            run_reports or [],
+            state_files
+            or {
+                "profiles": _state_file_location(PROFILE_FILE_NAME),
+                "workspace": _state_file_location(WORKSPACE_FILE_NAME),
+            },
+        ),
+        sort_keys=True,
+    )
+    files["session_report"] = session_report_path
+
+    backup_result = _backup_state_files(os.path.join(destination_dir, "state_backup"))
+    manifest_path = os.path.join(destination_dir, "manifest.json")
+    result = {
+        "app_version": APP_VERSION,
+        "created_at": datetime.datetime.now().isoformat(timespec="seconds"),
+        "bundle_dir": destination_dir,
+        "files": files,
+        "backup": backup_result,
+        "privacy_note": "Contains AutoClicker health, session, state summary, and known app-state files only.",
+    }
+    result["manifest_path"] = manifest_path
+    _atomic_write_json(manifest_path, result, sort_keys=True)
+    return result
+
+
 def _validate_recording_file(file_path):
     points = _normalize_recording_points(_load_json_file(file_path), strict=True)
     return {
@@ -4864,8 +4919,9 @@ def MAINWINDOW_REDESIGNED():
             support_body.columnconfigure(1, weight=1)
             ttk.Button(support_body, text="Health Check", style="Secondary.TButton", command=self._open_health_dashboard).grid(row=0, column=0, sticky="ew", pady=(0, 8))
             ttk.Button(support_body, text="Session Report", style="Secondary.TButton", command=self._export_session_report).grid(row=0, column=1, sticky="ew", padx=(8, 0), pady=(0, 8))
-            ttk.Button(support_body, text="Backup State", style="Secondary.TButton", command=self._backup_state_snapshot).grid(row=1, column=0, sticky="ew")
-            ttk.Button(support_body, text="Open State Folder", style="Secondary.TButton", command=self._open_state_folder).grid(row=1, column=1, sticky="ew", padx=(8, 0))
+            ttk.Button(support_body, text="Support Bundle", style="Secondary.TButton", command=self._create_support_bundle).grid(row=1, column=0, columnspan=2, sticky="ew", pady=(0, 8))
+            ttk.Button(support_body, text="Backup State", style="Secondary.TButton", command=self._backup_state_snapshot).grid(row=2, column=0, sticky="ew")
+            ttk.Button(support_body, text="Open State Folder", style="Secondary.TButton", command=self._open_state_folder).grid(row=2, column=1, sticky="ew", padx=(8, 0))
 
             controls_card, controls_body = self._create_card(
                 right_stack,
@@ -4960,6 +5016,7 @@ def MAINWINDOW_REDESIGNED():
             tools_menu.add_command(label='Recording Studio', command=self._open_recording_studio)
             tools_menu.add_command(label='Health Check', command=self._open_health_dashboard)
             tools_menu.add_command(label='Export Session Report', command=self._export_session_report)
+            tools_menu.add_command(label='Create Support Bundle', command=self._create_support_bundle)
             tools_menu.add_command(label='Backup State Snapshot', command=self._backup_state_snapshot)
             tools_menu.add_command(label='Open State Folder', command=self._open_state_folder)
             tools_menu.add_separator()
@@ -4993,6 +5050,7 @@ def MAINWINDOW_REDESIGNED():
             self.popup.add_command(label='Recording Studio', command=self._open_recording_studio)
             self.popup.add_command(label='Health Check', command=self._open_health_dashboard)
             self.popup.add_command(label='Export Session Report', command=self._export_session_report)
+            self.popup.add_command(label='Create Support Bundle', command=self._create_support_bundle)
             self.popup.add_command(label='Backup State Snapshot', command=self._backup_state_snapshot)
             self.popup.add_command(label='Open State Folder', command=self._open_state_folder)
             self.popup.add_separator()
@@ -5406,6 +5464,7 @@ def MAINWINDOW_REDESIGNED():
                 except Exception as exc:
                     self.status_var.set(f"Profile file could not be loaded: {exc}")
             self._refresh_profile_choices()
+            self._refresh_profile_state()
 
         def _save_current_profile(self):
             profile_name = self.profile_name_var.get().strip()
@@ -5422,6 +5481,7 @@ def MAINWINDOW_REDESIGNED():
 
             self.profile_choice_var.set(profile_name)
             self._refresh_profile_choices()
+            self._refresh_profile_state()
             self.status_var.set(f"Saved profile '{profile_name}'.")
             self._append_activity(f"Saved profile '{profile_name}'.")
             self._schedule_workspace_save()
@@ -5439,6 +5499,7 @@ def MAINWINDOW_REDESIGNED():
             self.profile_name_var.set(profile_name)
             self.profile_choice_var.set(profile_name)
             self.status_var.set(f"Loaded profile '{profile_name}'.")
+            self._refresh_profile_state()
             self._append_activity(f"Loaded profile '{profile_name}'.")
             self._schedule_workspace_save()
 
@@ -5461,6 +5522,7 @@ def MAINWINDOW_REDESIGNED():
                 return
 
             self._refresh_profile_choices()
+            self._refresh_profile_state()
             self.status_var.set(f"Deleted profile '{profile_name}'.")
             self._append_activity(f"Deleted profile '{profile_name}'.")
             self._schedule_workspace_save()
@@ -5557,6 +5619,7 @@ def MAINWINDOW_REDESIGNED():
                 return
 
             self._refresh_profile_choices()
+            self._refresh_profile_state()
             self.status_var.set(f"Imported {preview['valid_count']} profile(s).")
             self._append_activity(
                 f"Imported {preview['valid_count']} profile(s) from {os.path.basename(import_path)}."
@@ -5600,6 +5663,31 @@ def MAINWINDOW_REDESIGNED():
             messagebox.showinfo("State backup", message, parent=self)
             self.status_var.set(f"State backup ready: {os.path.basename(backup_dir)}.")
             self._append_activity(f"State backup created with {copied_count} file(s).")
+
+        def _create_support_bundle(self):
+            try:
+                bundle_result = _build_support_bundle(
+                    profile_data=self._collect_profile_data(),
+                    activity_history=self.activity_history,
+                    run_reports=self.run_reports,
+                    state_files={
+                        "profiles": self.profile_file,
+                        "workspace": self.workspace_file,
+                    },
+                )
+            except Exception as exc:
+                messagebox.showerror("Support bundle failed", f"Unable to create the support bundle.\n{exc}", parent=self)
+                return
+
+            bundle_dir = bundle_result["bundle_dir"]
+            file_count = len(bundle_result["files"]) + bundle_result["backup"]["count"]
+            messagebox.showinfo(
+                "Support bundle",
+                f"Created a support bundle with {file_count} file(s).\n\nFolder:\n{bundle_dir}",
+                parent=self,
+            )
+            self.status_var.set(f"Support bundle ready: {os.path.basename(bundle_dir)}.")
+            self._append_activity(f"Support bundle created with {file_count} file(s).")
 
         def _export_activity_log(self):
             if not self.activity_history:
@@ -5751,6 +5839,7 @@ def MAINWINDOW_REDESIGNED():
             ttk.Button(button_row, text="Open Profiles File", style="Secondary.TButton", command=lambda: self._open_path_in_explorer(self.profile_file)).grid(row=1, column=0, sticky="ew", padx=(0, 8))
             ttk.Button(button_row, text="Open Workspace File", style="Secondary.TButton", command=lambda: self._open_path_in_explorer(self.workspace_file)).grid(row=1, column=1, sticky="ew", padx=(0, 8))
             ttk.Button(button_row, text="Export Activity", style="Secondary.TButton", command=self._export_activity_log).grid(row=1, column=2, sticky="ew")
+            ttk.Button(button_row, text="Create Support Bundle", style="Secondary.TButton", command=self._create_support_bundle).grid(row=2, column=0, columnspan=3, sticky="ew", pady=(8, 0))
 
             refresh_report()
 

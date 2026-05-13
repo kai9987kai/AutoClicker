@@ -247,6 +247,55 @@ class HelperTests(unittest.TestCase):
         self.assertTrue(AutoClicker.SAFETY_PRESETS["Guarded Live"]["pyautogui_failsafe"])
         self.assertEqual(AutoClicker.SAFETY_PRESETS["Manual Stop Live"]["max_actions"], "0")
 
+    def test_profile_state_reports_saved_modified_new_and_missing(self):
+        saved_profiles = {"default": {"delay": "0.1", "dry_run": True}}
+
+        saved = AutoClicker._build_profile_state(
+            "default",
+            "default",
+            {"delay": "0.1", "dry_run": True},
+            saved_profiles,
+        )
+        modified = AutoClicker._build_profile_state(
+            "default",
+            "default",
+            {"delay": "0.2", "dry_run": True},
+            saved_profiles,
+        )
+        new = AutoClicker._build_profile_state("new", "", {"delay": "0.1"}, saved_profiles)
+        missing = AutoClicker._build_profile_state("", "", {"delay": "0.1"}, saved_profiles)
+
+        self.assertEqual(saved["state"], "saved")
+        self.assertEqual(modified["state"], "modified")
+        self.assertEqual(new["state"], "new")
+        self.assertEqual(missing["state"], "review")
+        self.assertIn("Modified", AutoClicker._format_profile_state_text(modified))
+
+    def test_support_bundle_writes_known_reports_and_backup(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            state_dir = os.path.join(temp_dir, "AutoClicker")
+            bundle_dir = os.path.join(temp_dir, "bundle")
+            os.makedirs(state_dir)
+            AutoClicker._atomic_write_json(
+                os.path.join(state_dir, "autoclicker_workspace.json"),
+                {"activity_history": ["one"], "run_reports": []},
+            )
+
+            with mock.patch.dict(os.environ, {"APPDATA": temp_dir}, clear=False):
+                with mock.patch("AutoClicker.os.getcwd", return_value=os.path.join(temp_dir, "cwd")):
+                    result = AutoClicker._build_support_bundle(
+                        bundle_dir,
+                        profile_data={"dry_run": True},
+                        activity_history=["one"],
+                        run_reports=[{"actions": 1}],
+                        state_files={"workspace": "workspace.json"},
+                    )
+
+            self.assertTrue(os.path.exists(result["manifest_path"]))
+            self.assertTrue(os.path.exists(result["files"]["health_report"]))
+            self.assertTrue(os.path.exists(result["files"]["session_report"]))
+            self.assertEqual(result["backup"]["count"], 1)
+
 
 if __name__ == "__main__":
     unittest.main()

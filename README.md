@@ -16,6 +16,8 @@ Windows desktop auto-clicker utilities built in Python with Tkinter and PyAutoGU
 - V10.1 Support Hub in the right rail for health checks, session reports, state backups, and opening the app-data folder.
 - V10.1 run readiness checklist in Live Review with target, output, fail-safe, stop-boundary, pace, and stop-hotkey checks.
 - V10.1 Safety Guard presets for Simulation, Guarded Live, and Manual Stop Live modes.
+- V10.1 profile state in Live Review shows saved, modified, new, or missing profile state for the current controls.
+- V10.1 support bundle workflow packages health, session, state summary, and known app-state backup files for troubleshooting.
 - V10.1 dry-run mode for simulating click runs, sequence runs, and recording playback without sending mouse clicks.
 - V10.1 session report export with recent activity, run summaries, active profile settings, and state-file paths.
 - V10.1 Start button state now reflects active click runs, making duplicate start attempts visibly unavailable.
@@ -93,6 +95,8 @@ Optional tools inside the full app:
 - Health Check
 - Safety Guard and plan validation
 - Run readiness checklist and safety presets
+- Profile state review
+- Support bundle creation
 - Dry-run simulation
 - Session report export
 - Support Hub state backup and app-data folder shortcuts
