@@ -16,12 +16,15 @@ import math
 import platform
 import warnings
 import shutil
+import re
 
 IMPORT_ERRORS = {}
-APP_VERSION = "V10.1"
+APP_VERSION = "V11.0"
 APP_STATE_DIR_NAME = "AutoClicker"
 PROFILE_FILE_NAME = "autoclicker_profiles.json"
 WORKSPACE_FILE_NAME = "autoclicker_workspace.json"
+RUN_LOG_FILE_NAME = "autoclicker_runs.log"
+STATE_SCHEMA_VERSION = 2
 DEFAULT_CLICK_TYPES = {
     "Left Click": ("left", 1),
     "Right Click": ("right", 1),
@@ -29,6 +32,34 @@ DEFAULT_CLICK_TYPES = {
     "Double Left Click": ("left", 2),
     "Double Right Click": ("right", 2),
     "Double Middle Click": ("middle", 2),
+}
+
+# Every action the run engine can emit. "click" entries reproduce DEFAULT_CLICK_TYPES exactly,
+# so existing profiles, sequences and workspaces keep loading unchanged.
+ACTION_REGISTRY = {
+    "Left Click": {"kind": "click", "button": "left", "clicks": 1},
+    "Right Click": {"kind": "click", "button": "right", "clicks": 1},
+    "Middle Click": {"kind": "click", "button": "middle", "clicks": 1},
+    "Double Left Click": {"kind": "click", "button": "left", "clicks": 2},
+    "Double Right Click": {"kind": "click", "button": "right", "clicks": 2},
+    "Double Middle Click": {"kind": "click", "button": "middle", "clicks": 2},
+    "Triple Left Click": {"kind": "click", "button": "left", "clicks": 3},
+    "Key Press": {"kind": "key", "uses": ("action_key",)},
+    "Key Hold": {"kind": "key_hold", "uses": ("action_key", "hold_duration")},
+    "Type Text": {"kind": "text", "uses": ("action_text",)},
+    "Scroll Up": {"kind": "scroll", "direction": 1, "uses": ("scroll_amount",)},
+    "Scroll Down": {"kind": "scroll", "direction": -1, "uses": ("scroll_amount",)},
+    "Click And Hold": {"kind": "hold", "button": "left", "uses": ("hold_duration",)},
+    "Drag To": {"kind": "drag", "button": "left", "uses": ("drag_to_x", "drag_to_y", "hold_duration")},
+    "Move Only": {"kind": "move"},
+}
+ACTION_DEFAULTS = {
+    "action_key": "space",
+    "action_text": "",
+    "scroll_amount": 3,
+    "hold_duration": 0.25,
+    "drag_to_x": 0,
+    "drag_to_y": 0,
 }
 PROFILE_FIELDS = {
     "target_x",
@@ -60,6 +91,15 @@ PROFILE_FIELDS = {
     "dry_run",
     "pyautogui_failsafe",
     "theme",
+    "action_key",
+    "action_text",
+    "scroll_amount",
+    "hold_duration",
+    "drag_to_x",
+    "drag_to_y",
+    "pacing_mode",
+    "scheduled_start",
+    "target_cps",
 }
 PROFILE_INT_FIELDS = {
     "target_x",
@@ -69,6 +109,9 @@ PROFILE_INT_FIELDS = {
     "max_actions",
     "micro_pause_every",
     "repeat_count",
+    "scroll_amount",
+    "drag_to_x",
+    "drag_to_y",
 }
 PROFILE_FLOAT_FIELDS = {
     "delay",
@@ -78,6 +121,8 @@ PROFILE_FLOAT_FIELDS = {
     "micro_pause_duration",
     "window_opacity",
     "ui_scale",
+    "hold_duration",
+    "target_cps",
 }
 PROFILE_BOOL_FIELDS = {
     "topmost",
@@ -92,10 +137,11 @@ PROFILE_BOOL_FIELDS = {
     "pyautogui_failsafe",
 }
 PROFILE_ENUM_FIELDS = {
-    "click_mode": set(DEFAULT_CLICK_TYPES),
+    "click_mode": set(ACTION_REGISTRY),
     "repeat_mode": {"Infinite", "Burst Count"},
-    "behaviour_preset": {"Balanced", "Precision", "Burst Sprint", "Human Mimic"},
-    "theme": {"Light", "Dark", "Ocean"},
+    "behaviour_preset": {"Balanced", "Precision", "Burst Sprint", "Human Mimic", "Feather Touch"},
+    "theme": {"Light", "Dark", "Ocean", "Midnight", "System"},
+    "pacing_mode": {"Precise", "Legacy V10.1"},
 }
 SAFETY_PRESETS = {
     "Simulation": {
@@ -179,6 +225,11 @@ def _atomic_write_json(path, payload, sort_keys=False):
     try:
         with open(temp_path, "w", encoding="utf-8") as file_handle:
             json.dump(payload, file_handle, indent=2, sort_keys=sort_keys)
+            file_handle.flush()
+            try:
+                os.fsync(file_handle.fileno())
+            except Exception:
+                pass
         os.replace(temp_path, path)
     except Exception:
         try:
@@ -187,6 +238,328 @@ def _atomic_write_json(path, payload, sort_keys=False):
         except Exception:
             pass
         raise
+
+
+def _interruptible_sleep(duration, should_stop=None, slice_seconds=0.02, clock=None, sleeper=None):
+    """Sleep up to `duration`, checking `should_stop` between short slices.
+
+    Returns True when the full duration elapsed and False when `should_stop` cut it short.
+    Sleep arguments are clamped to >= 0 so a descheduled thread can never hit
+    ValueError: sleep length must be non-negative.
+    """
+    clock = clock or time.perf_counter
+    sleeper = sleeper or time.sleep
+    try:
+        duration = float(duration)
+    except Exception:
+        return True
+    if duration <= 0:
+        return not (should_stop is not None and should_stop())
+
+    slice_seconds = max(0.001, float(slice_seconds))
+    wake_at = clock() + duration
+    while True:
+        if should_stop is not None and should_stop():
+            return False
+        remaining = wake_at - clock()
+        if remaining <= 0:
+            return True
+        sleeper(max(0.0, min(slice_seconds, remaining)))
+
+
+def _resolve_action(action_name, config=None, registry=None):
+    """Describe an action as {kind, callable name, kwargs} without touching pyautogui.
+
+    Keeping dispatch declarative means every action the engine can emit is verifiable
+    headlessly, on machines with no display and no pyautogui installed.
+    """
+    registry = registry if registry is not None else ACTION_REGISTRY
+    if action_name not in registry:
+        raise ValueError(f"Unknown action type: {action_name!r}")
+    spec = registry[action_name]
+    config = config or {}
+
+    def setting(name):
+        value = config.get(name, ACTION_DEFAULTS.get(name))
+        return ACTION_DEFAULTS.get(name) if value is None else value
+
+    kind = spec["kind"]
+    x_pos, y_pos = config.get("x", 0), config.get("y", 0)
+
+    if kind == "click":
+        return {"kind": kind, "call": "click",
+                "kwargs": {"x": x_pos, "y": y_pos, "button": spec["button"], "clicks": spec["clicks"]}}
+    if kind == "move":
+        return {"kind": kind, "call": "moveTo", "kwargs": {"x": x_pos, "y": y_pos}}
+    if kind == "key":
+        key_name = str(setting("action_key")).strip()
+        if not key_name:
+            raise ValueError("Key Press needs a key name (for example: space, enter, f5, a).")
+        return {"kind": kind, "call": "press", "kwargs": {"keys": key_name}}
+    if kind == "key_hold":
+        key_name = str(setting("action_key")).strip()
+        if not key_name:
+            raise ValueError("Key Hold needs a key name (for example: shift, w, ctrl).")
+        return {"kind": kind, "call": "keyDown/keyUp",
+                "kwargs": {"key": key_name, "hold_duration": max(0.0, float(setting("hold_duration")))}}
+    if kind == "text":
+        text_value = str(setting("action_text"))
+        if not text_value:
+            raise ValueError("Type Text needs some text to type.")
+        return {"kind": kind, "call": "write", "kwargs": {"message": text_value}}
+    if kind == "scroll":
+        magnitude = abs(int(setting("scroll_amount")))
+        if magnitude == 0:
+            raise ValueError("Scroll amount must not be zero.")
+        return {"kind": kind, "call": "scroll",
+                "kwargs": {"clicks": magnitude * spec["direction"], "x": x_pos, "y": y_pos}}
+    if kind == "hold":
+        return {"kind": kind, "call": "mouseDown/mouseUp",
+                "kwargs": {"x": x_pos, "y": y_pos, "button": spec["button"],
+                           "hold_duration": max(0.0, float(setting("hold_duration")))}}
+    if kind == "drag":
+        return {"kind": kind, "call": "mouseDown/moveTo/mouseUp",
+                "kwargs": {"x": x_pos, "y": y_pos,
+                           "to_x": int(setting("drag_to_x")), "to_y": int(setting("drag_to_y")),
+                           "button": spec["button"],
+                           "hold_duration": max(0.0, float(setting("hold_duration")))}}
+    raise ValueError(f"Unsupported action kind: {kind!r}")
+
+
+def _action_moves_pointer(action_name, registry=None):
+    """True when the action is anchored to the target coordinate."""
+    registry = registry if registry is not None else ACTION_REGISTRY
+    spec = registry.get(action_name) or {}
+    return spec.get("kind") not in ("key", "key_hold", "text")
+
+
+def _cps_to_delay(cps):
+    """Convert a clicks-per-second target into a per-action delay in seconds."""
+    try:
+        cps = float(cps)
+    except Exception:
+        return None
+    if cps <= 0:
+        return None
+    return 1.0 / cps
+
+
+def _delay_to_cps(delay):
+    """Convert a per-action delay into clicks per second. Zero delay means unbounded."""
+    try:
+        delay = float(delay)
+    except Exception:
+        return None
+    if delay <= 0:
+        return None
+    return 1.0 / delay
+
+
+def _rate_stats(samples, window_seconds=3.0):
+    """Summarise (timestamp, cumulative_actions) samples into instant/average/peak rates."""
+    points = [(float(t), int(n)) for t, n in (samples or [])]
+    if len(points) < 2:
+        return {"instant_cps": 0.0, "average_cps": 0.0, "peak_cps": 0.0, "samples": len(points)}
+
+    first_time, first_count = points[0]
+    last_time, last_count = points[-1]
+    span = last_time - first_time
+    average = (last_count - first_count) / span if span > 0 else 0.0
+
+    window_start = last_time - max(0.001, float(window_seconds))
+    windowed = [p for p in points if p[0] >= window_start] or points[-2:]
+    window_span = windowed[-1][0] - windowed[0][0]
+    instant = (windowed[-1][1] - windowed[0][1]) / window_span if window_span > 0 else average
+
+    peak = 0.0
+    for (t0, n0), (t1, n1) in zip(points, points[1:]):
+        step = t1 - t0
+        if step > 0:
+            peak = max(peak, (n1 - n0) / step)
+
+    return {
+        "instant_cps": round(instant, 3),
+        "average_cps": round(average, 3),
+        "peak_cps": round(peak, 3),
+        "samples": len(points),
+    }
+
+
+def _effective_action_period(delay, pacing_mode="Precise", human_like=False, library_pause=0.1):
+    """Predict the real seconds-per-action, including PyAutoGUI's own inter-call pause.
+
+    In Legacy V10.1 mode pyautogui.PAUSE is left at its default, so each emitted call
+    silently adds `library_pause`; the UI used to promise the raw delay and be wrong by 2-3x.
+    """
+    try:
+        delay = max(0.0, float(delay))
+    except Exception:
+        delay = 0.0
+    if pacing_mode == "Precise":
+        overhead = 0.0
+    else:
+        overhead = float(library_pause) * (2 if human_like else 1)
+    if human_like:
+        overhead += 0.03  # average of the 0.01-0.05s humanised moveTo duration
+    return delay + overhead
+
+
+def _validate_hotkey(hotkey, parser=None):
+    """Check a hotkey string is one `keyboard` can actually poll.
+
+    `keyboard.is_pressed` raises for multi-step hotkeys ("a, b") and unmapped key names,
+    and the engine used to swallow that, leaving a run with a silently inert stop key.
+    """
+    hotkey = str(hotkey or "").strip()
+    if not hotkey:
+        return {"valid": False, "hotkey": "", "reason": "No hotkey set."}
+    if "," in hotkey:
+        return {
+            "valid": False,
+            "hotkey": hotkey,
+            "reason": "Multi-step hotkeys (\"a, b\") cannot be polled; use a combination like ctrl+k.",
+        }
+    if parser is None:
+        parser = globals().get("keyboard")
+        parser = getattr(parser, "parse_hotkey", None) if parser else None
+    if parser is None:
+        return {"valid": True, "hotkey": hotkey, "reason": "Not verified: keyboard support is unavailable."}
+    try:
+        parser(hotkey)
+    except Exception as exc:
+        return {"valid": False, "hotkey": hotkey, "reason": f"'{hotkey}' is not a key this system recognises ({exc})."}
+    return {"valid": True, "hotkey": hotkey, "reason": f"Stop hotkey is {hotkey}."}
+
+
+def _clamp_geometry_to_screen(geometry, screen_width, screen_height, margin=80):
+    """Keep a restored "WxH+X+Y" geometry on-screen.
+
+    A layout saved on a second monitor used to be restored verbatim, putting the
+    window somewhere the user could not reach it.
+    """
+    text = str(geometry or "").strip()
+    match = re.match(r"^(\d+)x(\d+)([+-]-?\d+)([+-]-?\d+)$", text)
+    if not match:
+        return text
+    width, height = int(match.group(1)), int(match.group(2))
+    x_pos, y_pos = int(match.group(3)), int(match.group(4))
+
+    width = max(200, min(width, int(screen_width)))
+    height = max(200, min(height, int(screen_height)))
+    x_pos = max(0, min(x_pos, max(0, int(screen_width) - margin)))
+    y_pos = max(0, min(y_pos, max(0, int(screen_height) - margin)))
+    return f"{width}x{height}+{x_pos}+{y_pos}"
+
+
+def _detect_system_theme(reader=None):
+    """Resolve the OS appearance preference to "Light" or "Dark".
+
+    `reader` lets tests inject a value; on Windows the real source is the
+    AppsUseLightTheme registry value under Personalize.
+    """
+    if reader is not None:
+        try:
+            return "Dark" if not reader() else "Light"
+        except Exception:
+            return "Light"
+    try:
+        import winreg
+
+        key_path = r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize"
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, key_path) as key:
+            apps_use_light, _ = winreg.QueryValueEx(key, "AppsUseLightTheme")
+        return "Light" if apps_use_light else "Dark"
+    except Exception:
+        return "Light"
+
+
+def _rotate_run_log(log_path, keep=1):
+    """Roll `x.log` to `x.log.1` so the live log never grows without bound."""
+    try:
+        oldest = f"{log_path}.{keep}"
+        if os.path.exists(oldest):
+            os.remove(oldest)
+        for index in range(keep - 1, 0, -1):
+            source = f"{log_path}.{index}"
+            if os.path.exists(source):
+                os.replace(source, f"{log_path}.{index + 1}")
+        if os.path.exists(log_path):
+            os.replace(log_path, f"{log_path}.1")
+        return True
+    except Exception:
+        return False
+
+
+def _read_run_log(log_path, limit=200):
+    """Read the newest `limit` run records back out of the JSON-lines run log."""
+    records = []
+    if not log_path or not os.path.exists(log_path):
+        return records
+    try:
+        with open(log_path, "r", encoding="utf-8") as handle:
+            for line in handle:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    records.append(json.loads(line))
+                except Exception:
+                    continue
+    except Exception:
+        return records
+    return records[-limit:] if limit else records
+
+
+def _summarize_run_history(records):
+    """Aggregate run records into lifetime totals the dashboard can show."""
+    records = [r for r in (records or []) if isinstance(r, dict)]
+    total_actions = sum(int(r.get("actions", 0) or 0) for r in records)
+    total_seconds = sum(float(r.get("elapsed_seconds", 0) or 0) for r in records)
+    live = [r for r in records if not r.get("dry_run")]
+    reasons = {}
+    for record in records:
+        reason = str(record.get("stop_reason", "unknown"))
+        reasons[reason] = reasons.get(reason, 0) + 1
+    return {
+        "runs": len(records),
+        "live_runs": len(live),
+        "dry_runs": len(records) - len(live),
+        "actions": total_actions,
+        "seconds": round(total_seconds, 3),
+        "average_cps": round(total_actions / total_seconds, 3) if total_seconds > 0 else 0.0,
+        "stop_reasons": reasons,
+        "last_run": records[-1] if records else None,
+    }
+
+
+def _parse_scheduled_start(value, now=None):
+    """Resolve a HH:MM / HH:MM:SS wall-clock start into seconds from `now`.
+
+    A time earlier than `now` means tomorrow, so "start at 09:00" set in the evening waits.
+    """
+    text = str(value or "").strip()
+    if not text:
+        return {"scheduled": False, "delay_seconds": 0.0, "detail": "No scheduled start."}
+    for fmt in ("%H:%M:%S", "%H:%M"):
+        try:
+            parsed = datetime.datetime.strptime(text, fmt)
+            break
+        except ValueError:
+            parsed = None
+    if parsed is None:
+        return {"scheduled": False, "delay_seconds": 0.0, "error": f"'{text}' is not a HH:MM or HH:MM:SS time."}
+
+    now = now or datetime.datetime.now()
+    target = now.replace(hour=parsed.hour, minute=parsed.minute, second=parsed.second, microsecond=0)
+    if target <= now:
+        target += datetime.timedelta(days=1)
+    delay_seconds = (target - now).total_seconds()
+    return {
+        "scheduled": True,
+        "delay_seconds": round(delay_seconds, 3),
+        "start_at": target.isoformat(timespec="seconds"),
+        "detail": f"Waiting {_format_seconds(delay_seconds)} until {target.strftime('%H:%M:%S')}.",
+    }
 
 
 def _format_seconds(seconds):
@@ -245,15 +618,47 @@ def _build_readiness_checklist(config, screen_size=None):
         add("Stop boundary", "review", "No runtime or action cap is set.")
 
     delay = float(config.get("delay", 0))
+    pacing_mode = config.get("pacing_mode", "Precise")
+    effective_period = _effective_action_period(delay, pacing_mode, config.get("human_like"))
     if delay == 0:
         add("Pace", "review", "Zero delay uses maximum available pace.")
+    elif abs(effective_period - delay) > 0.005:
+        add(
+            "Pace",
+            "review",
+            f"Base delay is {_format_seconds(delay)} but {pacing_mode} pacing makes each action take "
+            f"about {effective_period:.3f}s ({_delay_to_cps(effective_period) or 0:.1f}/sec).",
+        )
     else:
-        add("Pace", "ok", f"Base delay is {_format_seconds(delay)}.")
+        add("Pace", "ok", f"Base delay is {_format_seconds(delay)} (about {_delay_to_cps(delay) or 0:.1f} action(s)/sec).")
 
+    # A hotkey that `keyboard` cannot poll used to be reported green while being inert.
+    hotkey_check = _validate_hotkey(config.get("stop_hotkey"))
     if config.get("stop_hotkey"):
-        add("Stop hotkey", "ok", f"Stop hotkey is {config['stop_hotkey']}.")
+        if hotkey_check["valid"]:
+            add("Stop hotkey", "ok", hotkey_check["reason"])
+        else:
+            add("Stop hotkey", "review", hotkey_check["reason"])
     elif repeat_limit is None and runtime_limit == 0 and max_actions == 0:
         add("Stop hotkey", "review", "Continuous run has no stop hotkey.")
+
+    action_name = config.get("click_mode")
+    if action_name:
+        try:
+            _resolve_action(action_name, config)
+            add("Action", "ok", f"{action_name} is configured correctly.")
+        except Exception as exc:
+            add("Action", "review", str(exc))
+
+    schedule = config.get("schedule") or {}
+    if schedule.get("error"):
+        add("Scheduled start", "review", schedule["error"])
+    elif schedule.get("scheduled"):
+        add("Scheduled start", "ok", schedule.get("detail", "Scheduled."))
+
+    targets = config.get("targets") or []
+    if len(targets) > 1:
+        add("Targets", "ok", f"Round-robin cycles {len(targets)} recorded point(s).")
 
     review_count = sum(1 for item in items if item["state"] == "review")
     status = "Ready" if review_count == 0 else f"Review {review_count} item(s)"
@@ -370,34 +775,55 @@ except ImportError:
     winsound = None
 
 
-def _collect_headless_health_data():
+DEPENDENCY_CATALOGUE = {
+    "pyautogui": {"module": "pyautogui", "required": True, "unlocks": "click, scroll, key and drag output"},
+    "keyboard": {"module": "keyboard", "required": True, "unlocks": "stop hotkey, global hotkeys, point recording"},
+    "pystray": {"module": "pystray", "required": False, "unlocks": "close-to-tray and the tray menu"},
+    "Pillow": {"module": "PIL", "required": False, "unlocks": "Photo Clicker previews and screen sampling"},
+    "numpy": {"module": "numpy", "required": False, "unlocks": "fast Colour Clicker region scanning"},
+    "opencv-python": {"module": "cv2", "required": False, "unlocks": "Photo Clicker confidence matching"},
+    "win10toast": {"module": "win10toast", "required": False, "unlocks": "Windows toast notifications"},
+}
+
+
+def _collect_dependency_health(catalogue=None):
+    """Resolve every catalogued dependency to an availability record. Pure and headless."""
     import importlib.util
 
-    dependency_names = {
-        "pyautogui": "pyautogui",
-        "keyboard": "keyboard",
-        "pystray": "pystray",
-        "Pillow": "PIL",
-        "numpy": "numpy",
-        "pywin32": "win32api",
-    }
+    catalogue = catalogue if catalogue is not None else DEPENDENCY_CATALOGUE
     dependencies = {}
-    for dependency_name, module_name in dependency_names.items():
+    for dependency_name, spec in catalogue.items():
+        module_name = spec["module"]
         if dependency_name in IMPORT_ERRORS:
-            dependencies[dependency_name] = {
-                "available": False,
-                "detail": IMPORT_ERRORS[dependency_name],
-            }
-        elif importlib.util.find_spec(module_name) is None:
-            dependencies[dependency_name] = {
-                "available": False,
-                "detail": "module not found",
-            }
+            available, detail = False, IMPORT_ERRORS[dependency_name]
         else:
-            dependencies[dependency_name] = {
-                "available": True,
-                "detail": "available",
-            }
+            try:
+                found = importlib.util.find_spec(module_name) is not None
+            except Exception as exc:
+                found, detail = False, f"probe failed: {exc}"
+            else:
+                detail = "available" if found else "module not found"
+            available = found
+        dependencies[dependency_name] = {
+            "available": available,
+            "detail": detail,
+            "required": bool(spec.get("required")),
+            "unlocks": spec.get("unlocks", ""),
+        }
+    return dependencies
+
+
+def _missing_required_dependencies(dependencies):
+    """Names of required dependencies that are unavailable, sorted for stable output."""
+    return sorted(
+        name
+        for name, data in (dependencies or {}).items()
+        if data.get("required") and not data.get("available")
+    )
+
+
+def _collect_headless_health_data():
+    dependencies = _collect_dependency_health()
 
     profile_file = _state_file_location(PROFILE_FILE_NAME)
     workspace_file = _state_file_location(WORKSPACE_FILE_NAME)
@@ -407,6 +833,7 @@ def _collect_headless_health_data():
         "python": sys.version.split()[0],
         "resource_root": os.path.dirname(_resource_path("favicon.ico")),
         "dependencies": dependencies,
+        "missing_required": _missing_required_dependencies(dependencies),
         "state_files": {
             "profiles": {
                 "path": profile_file,
@@ -424,10 +851,17 @@ def _build_headless_health_report():
     health_data = _collect_headless_health_data()
     dependency_lines = []
     for dependency_name, dependency_data in health_data["dependencies"].items():
+        tier = "required" if dependency_data.get("required") else "optional"
         if dependency_data["available"]:
-            dependency_lines.append(f"- {dependency_name}: available")
+            dependency_lines.append(f"- {dependency_name} ({tier}): available")
         else:
-            dependency_lines.append(f"- {dependency_name}: missing ({dependency_data['detail']})")
+            unlocks = dependency_data.get("unlocks") or "extra features"
+            dependency_lines.append(
+                f"- {dependency_name} ({tier}): missing ({dependency_data['detail']}) - unlocks {unlocks}"
+            )
+    missing_required = health_data.get("missing_required") or []
+    if missing_required:
+        dependency_lines.append(f"- ACTION: pip install {' '.join(missing_required)}")
 
     profile_file = health_data["state_files"]["profiles"]
     workspace_file = health_data["state_files"]["workspace"]
@@ -506,7 +940,9 @@ def _normalize_recording_points(raw_points, limit=200, strict=True):
 
 
 def _normalize_sequence_steps(raw_steps, click_types=None):
-    click_types = click_types or DEFAULT_CLICK_TYPES
+    # Defaults to the full action registry so sequences can use keys, scrolls and drags,
+    # not just the six original click types.
+    click_types = click_types or ACTION_REGISTRY
     if not isinstance(raw_steps, list):
         raise ValueError("Sequence files must contain a list of steps.")
 
@@ -741,7 +1177,7 @@ def _validate_sequence_file(file_path, click_types=None):
 
 
 def _validate_profile_data(profile_name, profile_data, click_types=None):
-    click_types = click_types or DEFAULT_CLICK_TYPES
+    click_types = click_types or ACTION_REGISTRY
     enum_fields = dict(PROFILE_ENUM_FIELDS)
     enum_fields["click_mode"] = set(click_types)
 
@@ -932,478 +1368,24 @@ def _create_scrollable_shell(window, bg, min_width=700, padx=18, pady=18):
     window.after_idle(fit_shell_width)
     return shell, canvas
 
-def Photo_Clicker():
-    """Public entry point — opens the Photo Clicker window."""
+_WIN10TOAST_CACHE = []
 
-    if not _ensure_dependencies("Photo Clicker", ["pyautogui", "keyboard"]):
-        return
 
-    owner = tk._default_root
-    win = tk.Toplevel(owner) if owner else tk.Tk()
-    win.title("Photo Clicker")
-    win.geometry("680x620+280+100")
-    win.minsize(680, 620)
-    win.attributes("-topmost", True)
-    win.resizable(True, True)
-    win.configure(bg=_BG)
+def _load_win10toast():
+    """Import win10toast on first use; it drags in pkg_resources and costs ~1s."""
+    if _WIN10TOAST_CACHE:
+        return _WIN10TOAST_CACHE[0]
+    module = None
     try:
-        win.iconbitmap(_resource_path("favicon.ico"))
-    except Exception:
-        pass
+        with warnings.catch_warnings():
+            warnings.filterwarnings("ignore", message="pkg_resources is deprecated as an API.*", category=UserWarning)
+            import win10toast as _win10toast  # This module only works on Windows.
+        module = _win10toast
+    except Exception as exc:
+        IMPORT_ERRORS.setdefault("win10toast", str(exc))
+    _WIN10TOAST_CACHE.append(module)
+    return module
 
-    # ── state ────────────────────────────────────────────────────────────
-    state = {
-        "thread": None,
-        "stop_event": threading.Event(),
-        "image_path": None,
-        "thumbnail": None,
-    }
-    ui_queue = queue.Queue()
-
-    # ── variables ────────────────────────────────────────────────────────
-    filepath_var   = tk.StringVar(value="No image selected")
-    confidence_var = tk.StringVar(value="0.8")
-    mode_var       = tk.StringVar(value="Click Once")
-    burst_var      = tk.StringVar(value="5")
-    interval_var   = tk.StringVar(value="1.00")
-    button_var     = tk.StringVar(value="Left Click")
-    hotkey_var     = tk.StringVar(value="esc")
-    grayscale_var  = tk.BooleanVar(value=False)
-    region_var     = tk.StringVar(value="Full Screen")
-    rx1_var        = tk.StringVar(value="0")
-    ry1_var        = tk.StringVar(value="0")
-    rx2_var        = tk.StringVar(value="1920")
-    ry2_var        = tk.StringVar(value="1080")
-    status_var     = tk.StringVar(value="Select an image to locate on screen.")
-    stats_var      = tk.StringVar(value="No scans yet.")
-
-    try:
-        sw, sh = pyautogui.size()
-        rx2_var.set(str(sw))
-        ry2_var.set(str(sh))
-    except Exception:
-        pass
-
-    # ── helpers ──────────────────────────────────────────────────────────
-    def _set_status(msg):
-        if threading.current_thread() is threading.main_thread():
-            status_var.set(msg)
-        else:
-            ui_queue.put(("status", msg))
-
-    def _set_stats(msg):
-        if threading.current_thread() is threading.main_thread():
-            stats_var.set(msg)
-        else:
-            ui_queue.put(("stats", msg))
-
-    def _set_controls_running(running):
-        start_btn.configure(state=DISABLED if running else NORMAL)
-        stop_btn.configure(state=NORMAL if running else DISABLED)
-
-    def _pump_queue():
-        try:
-            while True:
-                action, payload = ui_queue.get_nowait()
-                if action == "status":
-                    status_var.set(payload)
-                elif action == "stats":
-                    stats_var.set(payload)
-                elif action == "finish":
-                    state["thread"] = None
-                    _set_controls_running(False)
-        except queue.Empty:
-            pass
-        try:
-            if win.winfo_exists():
-                win.after(100, _pump_queue)
-        except tk.TclError:
-            pass
-
-    def _stop_check():
-        if state["stop_event"].is_set():
-            return True
-        if keyboard and hotkey_var.get().strip():
-            try:
-                if keyboard.is_pressed(hotkey_var.get().strip()):
-                    state["stop_event"].set()
-                    _set_status(f"Stop hotkey '{hotkey_var.get().strip()}' pressed.")
-                    return True
-            except Exception:
-                pass
-        return False
-
-    # ── commands ─────────────────────────────────────────────────────────
-    def pick_image():
-        path = filedialog.askopenfilename(
-            title="Select reference image",
-            filetypes=[
-                ("Image files", "*.png *.jpg *.jpeg *.bmp *.gif *.tiff"),
-                ("All files", "*.*"),
-            ],
-            parent=win,
-        )
-        if not path:
-            return
-        state["image_path"] = path
-        filepath_var.set(os.path.basename(path))
-        _set_status(f"Loaded: {os.path.basename(path)}")
-
-        # thumbnail preview
-        if Image and ImageTk:
-            try:
-                img = Image.open(path)
-                img.thumbnail((160, 120), Image.LANCZOS)
-                photo = ImageTk.PhotoImage(img)
-                state["thumbnail"] = photo  # prevent GC
-                thumb_label.configure(image=photo, text="")
-            except Exception:
-                thumb_label.configure(image="", text="(preview unavailable)")
-        else:
-            thumb_label.configure(image="", text="(Pillow not installed)")
-
-    def _worker(image_path, conf, mode, burst_count, interval_sec,
-                btn, clicks, use_grayscale, region):
-        try:
-            total_found = 0
-            total_clicked = 0
-            started = time.perf_counter()
-
-            iterations = 0
-            while not _stop_check():
-                iterations += 1
-
-                try:
-                    loc = pyautogui.locateOnScreen(
-                        image_path,
-                        confidence=conf,
-                        grayscale=use_grayscale,
-                        region=region,
-                    )
-                except pyautogui.ImageNotFoundException:
-                    loc = None
-                except Exception as exc:
-                    _set_status(f"Scan error: {exc}")
-                    loc = None
-
-                elapsed = time.perf_counter() - started
-
-                if loc is not None:
-                    total_found += 1
-                    cx, cy = pyautogui.center(loc)
-                    pyautogui.click(x=cx, y=cy, button=btn, clicks=clicks,
-                                    interval=0.02 if clicks > 1 else 0.0)
-                    total_clicked += 1
-                    _set_status(f"Clicked image centre at ({cx}, {cy}).")
-                    _set_stats(
-                        f"Scan #{iterations} | found {total_found}x "
-                        f"| clicked {total_clicked}x | {elapsed:.2f}s elapsed"
-                    )
-                else:
-                    _set_status(f"Image not found on scan #{iterations}.")
-                    _set_stats(
-                        f"Scan #{iterations} | found {total_found}x "
-                        f"| clicked {total_clicked}x | {elapsed:.2f}s elapsed"
-                    )
-
-                # exit conditions
-                if mode == "Click Once":
-                    break
-                elif mode == "Burst Count":
-                    if total_clicked >= burst_count:
-                        _set_status(
-                            f"Burst complete: {total_clicked} click(s) in "
-                            f"{elapsed:.2f}s."
-                        )
-                        break
-                # continuous watch — loop again after interval
-                if not _stop_check() and mode != "Click Once":
-                    state["stop_event"].wait(interval_sec)
-
-        except Exception as exc:
-            _set_status(f"Worker error: {exc}")
-        finally:
-            ui_queue.put(("finish", None))
-
-    def start_scan():
-        if state["thread"] and state["thread"].is_alive():
-            _set_status("A scan is already running.")
-            return
-        if not state["image_path"]:
-            messagebox.showerror("No image", "Select a reference image first.",
-                                 parent=win)
-            return
-
-        try:
-            conf = float(confidence_var.get())
-            if not 0 < conf <= 1:
-                raise ValueError
-        except ValueError:
-            messagebox.showerror("Invalid confidence",
-                                 "Confidence must be between 0 and 1.",
-                                 parent=win)
-            return
-
-        click_map = {
-            "Left Click": ("left", 1),
-            "Right Click": ("right", 1),
-            "Middle Click": ("middle", 1),
-            "Double Left Click": ("left", 2),
-            "Double Right Click": ("right", 2),
-        }
-        btn_info = click_map.get(button_var.get(), ("left", 1))
-
-        mode = mode_var.get()
-        try:
-            burst_count = int(burst_var.get()) if mode == "Burst Count" else 1
-        except ValueError:
-            burst_count = 1
-
-        try:
-            interval_sec = float(interval_var.get())
-        except ValueError:
-            interval_sec = 1.0
-
-        use_grayscale = grayscale_var.get()
-
-        region = None
-        if region_var.get() == "Custom Region":
-            try:
-                rx1 = int(rx1_var.get())
-                ry1 = int(ry1_var.get())
-                rx2 = int(rx2_var.get())
-                ry2 = int(ry2_var.get())
-                region = (min(rx1, rx2), min(ry1, ry2),
-                          abs(rx2 - rx1), abs(ry2 - ry1))
-                if region[2] == 0 or region[3] == 0:
-                    raise ValueError("Zero-size region")
-            except Exception as exc:
-                messagebox.showerror("Invalid region", str(exc), parent=win)
-                return
-
-        state["stop_event"].clear()
-        _set_controls_running(True)
-        _set_status("Scanning for image…")
-
-        state["thread"] = threading.Thread(
-            target=_worker,
-            args=(state["image_path"], conf, mode, burst_count, interval_sec,
-                  btn_info[0], btn_info[1], use_grayscale, region),
-            daemon=True,
-        )
-        state["thread"].start()
-
-    def stop_scan():
-        if state["thread"] and state["thread"].is_alive():
-            state["stop_event"].set()
-            _set_status("Stop requested.")
-
-    def close_window():
-        state["stop_event"].set()
-        win.destroy()
-
-    def _toggle_region(*_):
-        is_custom = region_var.get() == "Custom Region"
-        for widget in (rx1_entry, ry1_entry, rx2_entry, ry2_entry):
-            widget.configure(state=NORMAL if is_custom else DISABLED)
-
-    def _toggle_burst(*_):
-        burst_entry.configure(
-            state=NORMAL if mode_var.get() == "Burst Count" else DISABLED
-        )
-
-    # ── styles ───────────────────────────────────────────────────────────
-    style = ttk.Style(win)
-    try:
-        style.theme_use("clam")
-    except Exception:
-        pass
-    style.configure("PC.Accent.TButton", background=_ACCENT,
-                    foreground="white", padding=(14, 8),
-                    font=("Segoe UI", 10, "bold"))
-    style.map("PC.Accent.TButton",
-              background=[("active", "#115e59"), ("disabled", "#94a3b8")])
-    style.configure("PC.Danger.TButton", background=_DANGER,
-                    foreground="white", padding=(12, 8),
-                    font=("Segoe UI", 10, "bold"))
-    style.map("PC.Danger.TButton",
-              background=[("active", "#991b1b"), ("disabled", "#94a3b8")])
-    style.configure("PC.Secondary.TButton", background="#e2e8f0",
-                    foreground="#0f172a", padding=(12, 7),
-                    font=("Segoe UI", 10))
-    style.map("PC.Secondary.TButton", background=[("active", "#cbd5e1")])
-
-    # ── layout ───────────────────────────────────────────────────────────
-    shell = tk.Frame(win, bg=_BG, padx=18, pady=18)
-    shell.pack(fill="both", expand=True)
-    shell.columnconfigure(0, weight=1)
-
-    # hero header
-    hero = tk.Frame(shell, bg=_HERO_BG, padx=20, pady=14)
-    hero.grid(row=0, column=0, sticky="ew")
-    tk.Label(hero, text="Photo Clicker", bg=_HERO_BG, fg=_HERO_FG,
-             font=("Segoe UI", 16, "bold")).pack(anchor="w")
-    tk.Label(hero, text="Locate a reference image on screen and click on it "
-             "automatically.", bg=_HERO_BG, fg=_HERO_SUB,
-             font=("Segoe UI", 9)).pack(anchor="w", pady=(2, 0))
-
-    # main card
-    card = tk.Frame(shell, bg=_CARD_BG, padx=16, pady=16,
-                    highlightbackground=_BORDER, highlightthickness=1)
-    card.grid(row=1, column=0, sticky="nsew", pady=(14, 0))
-    card.columnconfigure(1, weight=1)
-    card.columnconfigure(3, weight=1)
-    shell.rowconfigure(1, weight=1)
-
-    # row 0 — image picker
-    tk.Label(card, text="Reference image", bg=_CARD_BG, fg=_LABEL_FG,
-             font=("Segoe UI", 10, "bold")).grid(row=0, column=0, sticky=W,
-                                                  pady=(0, 6))
-    tk.Label(card, textvariable=filepath_var, bg=_CARD_BG, fg="#475569",
-             font=("Segoe UI", 10)).grid(row=0, column=1, sticky=W,
-                                          pady=(0, 6))
-    ttk.Button(card, text="Browse…", style="PC.Secondary.TButton",
-               command=pick_image).grid(row=0, column=2, columnspan=2,
-                                        sticky="e", pady=(0, 6))
-
-    # row 1 — thumbnail preview
-    tk.Label(card, text="Preview", bg=_CARD_BG, fg=_LABEL_FG,
-             font=("Segoe UI", 10, "bold")).grid(row=1, column=0, sticky="nw",
-                                                  pady=(0, 10))
-    thumb_label = tk.Label(card, text="(no image)", bg="#e2e8f0", fg="#64748b",
-                           width=22, height=7, relief="solid", bd=1,
-                           font=("Segoe UI", 9))
-    thumb_label.grid(row=1, column=1, sticky=W, pady=(0, 10))
-
-    # row 2 — confidence + click type
-    tk.Label(card, text="Confidence (0-1)", bg=_CARD_BG, fg=_LABEL_FG,
-             font=("Segoe UI", 10, "bold")).grid(row=2, column=0, sticky=W,
-                                                  pady=(0, 6))
-    ttk.Entry(card, textvariable=confidence_var, width=12).grid(
-        row=2, column=1, sticky=W, pady=(0, 6))
-    tk.Label(card, text="Click type", bg=_CARD_BG, fg=_LABEL_FG,
-             font=("Segoe UI", 10, "bold")).grid(row=2, column=2, sticky=W,
-                                                  padx=(14, 0), pady=(0, 6))
-    ttk.Combobox(card, textvariable=button_var, state="readonly", width=18,
-                 values=("Left Click", "Right Click", "Middle Click",
-                         "Double Left Click", "Double Right Click")).grid(
-        row=2, column=3, sticky=W, pady=(0, 6))
-
-    # row 3 — mode + burst count
-    tk.Label(card, text="Mode", bg=_CARD_BG, fg=_LABEL_FG,
-             font=("Segoe UI", 10, "bold")).grid(row=3, column=0, sticky=W,
-                                                  pady=(0, 6))
-    mode_combo = ttk.Combobox(card, textvariable=mode_var, state="readonly",
-                              width=18,
-                              values=("Click Once", "Burst Count",
-                                      "Continuous Watch"))
-    mode_combo.grid(row=3, column=1, sticky=W, pady=(0, 6))
-    tk.Label(card, text="Burst count", bg=_CARD_BG, fg=_LABEL_FG,
-             font=("Segoe UI", 10, "bold")).grid(row=3, column=2, sticky=W,
-                                                  padx=(14, 0), pady=(0, 6))
-    burst_entry = ttk.Entry(card, textvariable=burst_var, width=12,
-                            state=DISABLED)
-    burst_entry.grid(row=3, column=3, sticky=W, pady=(0, 6))
-
-    # row 4 — scan interval + stop hotkey
-    tk.Label(card, text="Scan interval (sec)", bg=_CARD_BG, fg=_LABEL_FG,
-             font=("Segoe UI", 10, "bold")).grid(row=4, column=0, sticky=W,
-                                                  pady=(0, 6))
-    ttk.Entry(card, textvariable=interval_var, width=12).grid(
-        row=4, column=1, sticky=W, pady=(0, 6))
-    tk.Label(card, text="Stop hotkey", bg=_CARD_BG, fg=_LABEL_FG,
-             font=("Segoe UI", 10, "bold")).grid(row=4, column=2, sticky=W,
-                                                  padx=(14, 0), pady=(0, 6))
-    ttk.Entry(card, textvariable=hotkey_var, width=12).grid(
-        row=4, column=3, sticky=W, pady=(0, 6))
-
-    # row 5 — grayscale + region selector
-    ttk.Checkbutton(card, text="Grayscale matching (faster, less precise)",
-                    variable=grayscale_var).grid(
-        row=5, column=0, columnspan=2, sticky=W, pady=(0, 6))
-    tk.Label(card, text="Region", bg=_CARD_BG, fg=_LABEL_FG,
-             font=("Segoe UI", 10, "bold")).grid(row=5, column=2, sticky=W,
-                                                  padx=(14, 0), pady=(0, 6))
-    region_combo = ttk.Combobox(card, textvariable=region_var, state="readonly",
-                                width=18,
-                                values=("Full Screen", "Custom Region"))
-    region_combo.grid(row=5, column=3, sticky=W, pady=(0, 6))
-
-    # row 6 — custom region fields
-    region_frame = ttk.LabelFrame(card, text="Custom region", padding=8)
-    region_frame.grid(row=6, column=0, columnspan=4, sticky="ew", pady=(4, 8))
-    ttk.Label(region_frame, text="X1").grid(row=0, column=0, sticky=W)
-    rx1_entry = ttk.Entry(region_frame, textvariable=rx1_var, width=8,
-                          state=DISABLED)
-    rx1_entry.grid(row=0, column=1, padx=(0, 10))
-    ttk.Label(region_frame, text="Y1").grid(row=0, column=2, sticky=W)
-    ry1_entry = ttk.Entry(region_frame, textvariable=ry1_var, width=8,
-                          state=DISABLED)
-    ry1_entry.grid(row=0, column=3, padx=(0, 10))
-    ttk.Label(region_frame, text="X2").grid(row=0, column=4, sticky=W)
-    rx2_entry = ttk.Entry(region_frame, textvariable=rx2_var, width=8,
-                          state=DISABLED)
-    rx2_entry.grid(row=0, column=5, padx=(0, 10))
-    ttk.Label(region_frame, text="Y2").grid(row=0, column=6, sticky=W)
-    ry2_entry = ttk.Entry(region_frame, textvariable=ry2_var, width=8,
-                          state=DISABLED)
-    ry2_entry.grid(row=0, column=7)
-
-    # row 7 — action buttons
-    btn_row = tk.Frame(card, bg=_CARD_BG)
-    btn_row.grid(row=7, column=0, columnspan=4, sticky="ew", pady=(6, 4))
-    start_btn = ttk.Button(btn_row, text="Start Scan", style="PC.Accent.TButton",
-                           command=start_scan)
-    start_btn.grid(row=0, column=0, padx=(0, 8))
-    stop_btn = ttk.Button(btn_row, text="Stop", style="PC.Danger.TButton",
-                          command=stop_scan, state=DISABLED)
-    stop_btn.grid(row=0, column=1)
-
-    # status strip
-    status_frame = tk.Frame(shell, bg=_STATUS_BG, padx=16, pady=10)
-    status_frame.grid(row=2, column=0, sticky="ew", pady=(14, 0))
-    tk.Label(status_frame, text="Status", bg=_STATUS_BG, fg=_HERO_FG,
-             font=("Segoe UI", 10, "bold")).grid(row=0, column=0, sticky=W)
-    tk.Label(status_frame, textvariable=status_var, bg=_STATUS_BG,
-             fg=_STATUS_FG, font=("Segoe UI", 10), wraplength=600,
-             justify=LEFT).grid(row=1, column=0, sticky=W, pady=(4, 0))
-    tk.Label(status_frame, textvariable=stats_var, bg=_STATUS_BG,
-             fg=_STATUS_FG, font=("Segoe UI", 9), wraplength=600,
-             justify=LEFT).grid(row=2, column=0, sticky=W, pady=(4, 0))
-
-    # bindings
-    mode_combo.bind("<<ComboboxSelected>>", _toggle_burst)
-    region_combo.bind("<<ComboboxSelected>>", _toggle_region)
-
-    _pump_queue()
-    win.protocol("WM_DELETE_WINDOW", close_window)
-    if owner is None:
-        win.mainloop()
-
-
-# allow standalone execution
-
-
-try:
-    import gspread
-    from oauth2client.service_account import ServiceAccountCredentials
-    from pprint import pprint
-except:
-    pass
-
-try:
-    with warnings.catch_warnings():
-        warnings.filterwarnings("ignore", message="pkg_resources is deprecated as an API.*", category=UserWarning)
-        import win10toast #This module only works on windows
-except:
-    pass
-
-try:
-    from PIL import ImageGrab
-    from colormap import rgb2hex
-    from win32api import GetSystemMetrics
-except:
-    pass
 
 ################################################################################
 #     /\  | |  | |__   __/ __ \   / ____| |    |_   _/ ____| |/ /  ____|  __ \ #
@@ -1412,247 +1394,6 @@ except:
 #  / ____ \ |__| |  | | | |__| | | |____| |____ _| || |____| . \| |____| | \ \ #
 # /_/    \_\____/   |_|  \____/   \_____|______|_____\_____|_|\_\______|_|  \_\#
 ################################################################################
-
-def Colour_Clicker():
-    """Advanced Colour Clicker with NumPy performance and Magnified Pipette."""
-    if not _ensure_dependencies("Advanced Colour Clicker", ["pyautogui", "keyboard"], parent=tk._default_root):
-        return
-    if ImageGrab is None:
-        _show_dependency_error("Advanced Colour Clicker", ["Pillow"], parent=tk._default_root)
-        return
-
-    _BG        = "#edf0f7"
-    _CARD_BG   = "#f8fafc"
-    _BORDER    = "#bfd0e5"
-    _HERO_BG   = "#1e293b"
-    _HERO_FG   = "#f8fafc"
-    _HERO_SUB  = "#94a3b8"
-    _LABEL_FG  = "#0f172a"
-    _ACCENT    = "#0f766e"
-    _DANGER    = "#b91c1c"
-
-    owner = tk._default_root
-    master = tk.Toplevel(owner) if owner else tk.Tk()
-    master.title("Advanced Colour Clicker")
-    master.geometry("720x780+300+100")
-    master.minsize(700, 700)
-    master.attributes("-topmost", True)
-    master.configure(bg=_BG)
-    try: master.iconbitmap(_resource_path("favicon.ico"))
-    except: pass
-
-    try:
-        import numpy as np
-        HAS_NUMPY = True
-    except ImportError:
-        HAS_NUMPY = False
-
-    try:
-        from PIL import Image, ImageTk
-        HAS_PIL_UI = True
-    except ImportError:
-        HAS_PIL_UI = False
-
-    try: screen_width, screen_height = pyautogui.size()
-    except: screen_width, screen_height = 1920, 1080
-
-    state = {"thread": None, "stop_event": threading.Event(), "is_sampling": False, "loupe_win": None, "loupe_canvas": None}
-    ui_queue = queue.Queue()
-
-    colour_var = tk.StringVar(value="#FFFFFF")
-    tolerance_var = tk.StringVar(value="8")
-    x_start_var = tk.StringVar(value="0")
-    y_start_var = tk.StringVar(value="0")
-    x_end_var = tk.StringVar(value=str(screen_width))
-    y_end_var = tk.StringVar(value=str(screen_height))
-    scan_step_var = tk.StringVar(value="2")
-    interval_var = tk.StringVar(value="0.50")
-    button_var = tk.StringVar(value="Left Click")
-    mode_var = tk.StringVar(value="First Match")
-    hotkey_var = tk.StringVar(value="esc")
-    status_var = tk.StringVar(value="Ready. Sample a colour or select an area.")
-    stats_var = tk.StringVar(value="No scans yet.")
-
-    def set_status(msg): ui_queue.put(("status", msg))
-    def set_stats(msg): ui_queue.put(("stats", msg))
-
-    def pump_ui_queue():
-        try:
-            while True:
-                t, d = ui_queue.get_nowait()
-                if t == "status": status_var.set(d)
-                elif t == "stats": stats_var.set(d)
-                elif t == "finish":
-                    state["thread"] = None
-                    scan_btn.configure(state=NORMAL)
-                    watch_btn.configure(state=NORMAL)
-                    stop_btn.configure(state=DISABLED)
-        except queue.Empty: pass
-        master.after(100, pump_ui_queue)
-
-    def select_area():
-        overlay = tk.Toplevel(master)
-        overlay.attributes("-alpha", 0.3)
-        overlay.attributes("-fullscreen", True)
-        overlay.attributes("-topmost", True)
-        overlay.configure(bg="black")
-        overlay.focus_force()
-        canvas = tk.Canvas(overlay, cursor="cross", bg="black", highlightthickness=0)
-        canvas.pack(fill="both", expand=True)
-        sel = {"x1": 0, "y1": 0, "rect": None}
-        def on_down(e):
-            sel["x1"], sel["y1"] = e.x, e.y
-            sel["rect" ] = canvas.create_rectangle(e.x, e.y, e.x, e.y, outline="white", width=2)
-        def on_move(e):
-            if sel["rect"]: canvas.coords(sel["rect"], sel["x1"], sel["y1"], e.x, e.y)
-        def on_up(e):
-            x1, y1, x2, y2 = sel["x1"], sel["y1"], e.x, e.y
-            x_start_var.set(str(min(x1, x2))); y_start_var.set(str(min(y1, y2)))
-            x_end_var.set(str(max(x1, x2))); y_end_var.set(str(max(y1, y2)))
-            overlay.destroy()
-            set_status(f"Region set to ({x_start_var.get()}, {y_start_var.get()}) to ({x_end_var.get()}, {y_end_var.get()})")
-        overlay.bind("<ButtonPress-1>", on_down)
-        overlay.bind("<B1-Motion>", on_move)
-        overlay.bind("<ButtonRelease-1>", on_up)
-        overlay.bind("<Escape>", lambda _: overlay.destroy())
-
-    def update_loupe():
-        if not state["is_sampling"]: return
-        try:
-            x, y = pyautogui.position()
-            state["loupe_win"].geometry(f"+{(x + 20)}+{(y + 20)}")
-            if HAS_PIL_UI:
-                img = ImageGrab.grab(bbox=(x-10, y-10, x+11, y+11)).convert("RGB")
-                img_zoom = img.resize((147, 147), Image.NEAREST)
-                photo = ImageTk.PhotoImage(img_zoom)
-                state["loupe_canvas"].delete("all")
-                state["loupe_canvas"].create_image(0, 0, anchor="nw", image=photo)
-                state["loupe_canvas"].image = photo
-                state["loupe_canvas"].create_line(73, 0, 73, 147, fill="red")
-                state["loupe_canvas"].create_line(0, 73, 147, 73, fill="red")
-                r, g, b = img.getpixel((10, 10))
-                state["loupe_win"].title(f"#{r:02X}{g:02X}{b:02X}")
-        except: pass
-        master.after(30, update_loupe)
-
-    def start_sampling():
-        if state["is_sampling"]: return
-        state["is_sampling"] = True
-        set_status("Sample colour: Click target pixel. ESC to cancel.")
-        master.config(cursor="cross")
-        lwin = tk.Toplevel(master)
-        lwin.overrideredirect(True)
-        lwin.attributes("-topmost", True)
-        lwin.geometry("150x150")
-        lwin.configure(bg="black", highlightbackground="white", highlightthickness=2)
-        lcanv = tk.Canvas(lwin, width=147, height=147, bg="black", highlightthickness=0)
-        lcanv.pack()
-        state["loupe_win"] = lwin
-        state["loupe_canvas"] = lcanv
-        update_loupe()
-        def perform_sample(e=None):
-            x, y = pyautogui.position()
-            img = ImageGrab.grab(bbox=(x, y, x+1, y+1)).convert('RGB')
-            r, g, b = img.getpixel((0, 0))
-            colour_var.set("#{:02X}{:02X}{:02X}".format(r, g, b))
-            update_preview(); cancel_sampling()
-        def cancel_sampling(e=None):
-            state["is_sampling"] = False; master.config(cursor="")
-            if state["loupe_win"]: state["loupe_win"].destroy()
-            master.unbind("<Button-1>"); 
-            try: keyboard.unhook_all_hotkeys()
-            except: pass
-        master.bind("<Button-1>", perform_sample)
-        keyboard.add_hotkey("esc", cancel_sampling)
-
-    def update_preview(*_):
-        try:
-            col = colour_var.get(); preview_box.configure(bg=col)
-        except: pass
-
-    def worker(target_hex, tolerance, bbox, step, mode, is_watcher, interval, btn, clicks, stop_hk):
-        try:
-            target_rgb = tuple(int(target_hex.lstrip('#')[i:i+2], 16) for i in (0, 2, 4))
-            iterations = 0; found_total = 0
-            while not state["stop_event"].is_set():
-                iterations += 1
-                if stop_hk and keyboard.is_pressed(stop_hk): break
-                img = ImageGrab.grab(bbox=bbox).convert("RGB")
-                found_points = []
-                if HAS_NUMPY:
-                    arr = np.array(img)
-                    diff = np.abs(arr - target_rgb)
-                    match_mask = np.all(diff <= tolerance, axis=-1)
-                    match_mask = match_mask[::step, ::step]
-                    y_coords, x_coords = np.where(match_mask)
-                    for y, x in zip(y_coords, x_coords): found_points.append((bbox[0] + x*step, bbox[1] + y*step))
-                else:
-                    for y in range(0, img.height, step):
-                        for x in range(0, img.width, step):
-                            r, g, b = img.getpixel((x, y))
-                            if all(abs(c-t) <= tolerance for c, t in zip((r, g, b), target_rgb)):
-                                found_points.append((bbox[0]+x, bbox[1]+y))
-                                if mode == "First Match": break
-                        if mode == "First Match" and found_points: break
-                if found_points:
-                    if mode == "First Match": pyautogui.click(found_points[0][0], found_points[0][1], button=btn, clicks=clicks); found_total += 1
-                    else:
-                        for px, py in found_points:
-                            if state["stop_event"].is_set(): break
-                            pyautogui.click(px, py, button=btn, clicks=clicks); found_total += 1
-                    set_status(f"Found {len(found_points)} match(es).")
-                else: set_status(f"No match in scan #{iterations}.")
-                set_stats(f"Scans: {iterations} | Clicks: {found_total}")
-                if not is_watcher: break
-                state["stop_event"].wait(interval)
-        except Exception as e: set_status(f"Error: {e}")
-        finally: ui_queue.put(("finish", None))
-
-    def start_worker(is_watcher):
-        try:
-            col, tol, step = colour_var.get(), int(tolerance_var.get()), int(scan_step_var.get())
-            bbox = (int(x_start_var.get()), int(y_start_var.get()), int(x_end_var.get()), int(y_end_var.get()))
-            interval = float(interval_var.get()); btn = "left" if "Left" in button_var.get() else "right"
-            clicks = 2 if "Double" in button_var.get() else 1; stop_hk = hotkey_var.get()
-            state["stop_event"].clear(); scan_btn.configure(state=DISABLED); watch_btn.configure(state=DISABLED); stop_btn.configure(state=NORMAL)
-            state["thread"] = threading.Thread(target=worker, args=(col, tol, bbox, step, mode_var.get(), is_watcher, interval, btn, clicks, stop_hk), daemon=True)
-            state["thread"].start()
-        except Exception as e: messagebox.showerror("Error", str(e))
-
-    shell = tk.Frame(master, bg=_BG, padx=20, pady=20); shell.pack(fill="both", expand=True)
-    hero = tk.Frame(shell, bg=_HERO_BG, padx=20, pady=15); hero.pack(fill="x")
-    tk.Label(hero, text="Advanced Colour Clicker", bg=_HERO_BG, fg=_HERO_FG, font=("Segoe UI", 16, "bold")).pack(anchor="w")
-    tk.Label(hero, text="Scan screen regions for colours with NumPy speed.", bg=_HERO_BG, fg=_HERO_SUB, font=("Segoe UI", 9)).pack(anchor="w")
-    card1 = tk.Frame(shell, bg=_CARD_BG, padx=15, pady=15, highlightbackground=_BORDER, highlightthickness=1); card1.pack(fill="x", pady=(15, 0))
-    tk.Label(card1, text="Target Colour & Tolerance", bg=_CARD_BG, fg=_LABEL_FG, font=("Segoe UI", 10, "bold")).pack(anchor="w", pady=(0, 10))
-    trow = tk.Frame(card1, bg=_CARD_BG); trow.pack(fill="x")
-    preview_box = tk.Frame(trow, width=40, height=40, relief="solid", bd=1); preview_box.pack(side="left", padx=(0, 10))
-    ttk.Entry(trow, textvariable=colour_var, width=12).pack(side="left", padx=(0, 10))
-    ttk.Button(trow, text="Pipette", command=start_sampling).pack(side="left", padx=(0, 10))
-    tk.Label(trow, text="Tolerance:", bg=_CARD_BG).pack(side="left"); ttk.Entry(trow, textvariable=tolerance_var, width=8).pack(side="left", padx=(5, 0))
-    card2 = tk.Frame(shell, bg=_CARD_BG, padx=15, pady=15, highlightbackground=_BORDER, highlightthickness=1); card2.pack(fill="x", pady=(15, 0))
-    tk.Label(card2, text="Scan Region", bg=_CARD_BG, fg=_LABEL_FG, font=("Segoe UI", 10, "bold")).pack(anchor="w", pady=(0, 10))
-    rg = tk.Frame(card2, bg=_CARD_BG); rg.pack(fill="x")
-    tk.Label(rg, text="X1", bg=_CARD_BG).grid(row=0, column=0, padx=2); ttk.Entry(rg, textvariable=x_start_var, width=7).grid(row=0, column=1)
-    tk.Label(rg, text="Y1", bg=_CARD_BG).grid(row=0, column=2, padx=2); ttk.Entry(rg, textvariable=y_start_var, width=7).grid(row=0, column=3)
-    tk.Label(rg, text="X2", bg=_CARD_BG).grid(row=0, column=4, padx=2); ttk.Entry(rg, textvariable=x_end_var, width=7).grid(row=0, column=5)
-    tk.Label(rg, text="Y2", bg=_CARD_BG).grid(row=0, column=6, padx=2); ttk.Entry(rg, textvariable=y_end_var, width=7).grid(row=0, column=7)
-    ttk.Button(rg, text="Select Area", command=select_area).grid(row=0, column=8, padx=10)
-    card3 = tk.Frame(shell, bg=_CARD_BG, padx=15, pady=15, highlightbackground=_BORDER, highlightthickness=1); card3.pack(fill="x", pady=(15, 0))
-    er = tk.Frame(card3, bg=_CARD_BG); er.pack(fill="x")
-    tk.Label(er, text="Mode:", bg=_CARD_BG).pack(side="left"); ttk.Combobox(er, textvariable=mode_var, values=("First Match", "All Matches"), state="readonly", width=14).pack(side="left", padx=4)
-    tk.Label(er, text="Step:", bg=_CARD_BG).pack(side="left", padx=(6, 0)); ttk.Entry(er, textvariable=scan_step_var, width=5).pack(side="left", padx=4)
-    tk.Label(er, text="Btn:", bg=_CARD_BG).pack(side="left", padx=(6, 0)); ttk.Combobox(er, textvariable=button_var, values=("Left Click", "Right Click", "Double Left"), state="readonly", width=12).pack(side="left", padx=4)
-    br = tk.Frame(shell, bg=_BG); br.pack(fill="x", pady=(20, 0))
-    scan_btn = ttk.Button(br, text="Single Scan", command=lambda: start_worker(False)); scan_btn.pack(side="left", padx=(0, 10))
-    watch_btn = ttk.Button(br, text="Watch Region", command=lambda: start_worker(True)); watch_btn.pack(side="left", padx=(0, 10))
-    stop_btn = ttk.Button(br, text="Stop", state=DISABLED, command=lambda: state["stop_event"].set()); stop_btn.pack(side="left")
-    ss = tk.Frame(shell, bg="#0f172a", padx=15, pady=10); ss.pack(fill="x", side="bottom")
-    tk.Label(ss, textvariable=status_var, bg="#0f172a", fg="#f8fafc", font=("Segoe UI", 9)).pack(anchor="w")
-    tk.Label(ss, textvariable=stats_var, bg="#0f172a", fg="#94a3b8", font=("Segoe UI", 8)).pack(anchor="w")
-    pump_ui_queue(); update_preview()
-    master.protocol("WM_DELETE_WINDOW", lambda: (state["stop_event"].set(), master.destroy()))
-
 
 def Photo_Clicker():
     """Public entry point for the upgraded Photo Clicker."""
@@ -2965,7 +2706,7 @@ def feedback():
 
 def NOTIFICATION():
     try:
-        toaster = win10toast.ToastNotifier()
+        toaster = _load_win10toast().ToastNotifier()
         toaster.show_toast("AutoClicker", APP_VERSION, duration=5, threaded=True, icon_path=_resource_path("favicon.ico"))
         messagebox.showinfo('AutoClicker', APP_VERSION)
     except:
@@ -3316,31 +3057,6 @@ left click the list""", anchor=E).place(x=350, y=220)
             tk.Label(self, text="Keyboard key to stop clicking:", background="#e7dff2").grid(row=1, column=2)
 
 
-        def _setup_tray(self):
-            try:
-                from PIL import Image
-                image = Image.open(_resource_path("favicon.ico"))
-                menu = (
-                    item('Restore', self._restore_from_tray),
-                    item('Start Clicker', self.startclick),
-                    item('Stop Clicker', self.stopclick),
-                    item('Exit', self.EXITME)
-                )
-                self.tray_icon = pystray.Icon("autoclicker", image, "AutoClicker", menu)
-                threading.Thread(target=self.tray_icon.run, daemon=True).start()
-            except:
-                pass
-
-        def _restore_from_tray(self, icon=None, item=None):
-            self.deiconify()
-            self.lift()
-            self.attributes("-topmost", True)
-
-        def _minimize_to_tray(self):
-            self.withdraw()
-            if not hasattr(self, 'tray_icon'):
-                self._setup_tray()
-
         def EXITME(self):
 
             YourGUI.destroy(self)
@@ -3533,629 +3249,47 @@ left click the list""", anchor=E).place(x=350, y=220)
                     if keyboard.is_pressed(self.inputhotkey.get()):
                         break
 
-        def do_hotkey(self):
-            hotkey = self.inputhotkey.get()
+    # This used to sit behind `if __name__ == '__main__'`, so Tools > Old Style GUI
+    # silently opened nothing whenever the module was imported rather than run directly.
+    your_gui = YourGUI()
+    your_gui.geometry("+300+300")
+    your_gui.attributes("-topmost", True)
+    your_gui.title('AutoClicker')  # Set title
+    try:
+        your_gui.iconbitmap(_resource_path("favicon.ico"))
+    except:
+        pass
+    your_gui.resizable(False, False)
+    your_gui.configure(background="#e7dff2")
+    your_gui.mainloop()
 
-    if __name__ == '__main__':
-        your_gui = YourGUI()
-        your_gui.geometry("+300+300")
-        your_gui.attributes("-topmost", True)
-        your_gui.title('AutoClicker')  # Set title
-        try:
-            your_gui.iconbitmap(_resource_path("favicon.ico"))
-        except:
-            pass
-        your_gui.resizable(False, False)
-        your_gui.configure(background="#e7dff2")
-        your_gui.mainloop()
-
-class Coordinates():
-    replayBtn = (100, 350)
-
-
-def MAINWINDOW_NEWSTYLE():
-    if not _ensure_dependencies("AutoClicker", ["pyautogui", "keyboard"]):
-        return
-    class YourGUI(tk.Tk):
-        def __init__(self):
-            tk.Tk.__init__(self)
-            ttk.Label(self, text="ENTER Y:", background="#e7dff2", anchor=E).grid(row=0, column=2)
-            ttk.Label(self, text="Delay Between clicks", background="#e7dff2", anchor=E).grid(row=7, column=0)
-            self.inputdelayentry = tk.StringVar()
-
-
-            
-            self.inputdelayentry.set("0")
-        
-            
-            self.inputdelay = ttk.Entry(self, textvariable= self.inputdelayentry).grid(row=7, column=1)
-            
-             
-            
-            
-            self.inputX = ttk.Entry(self)
-            self.inputX.grid(row=0, column=1)
-            
-            self.cmb = ttk.Combobox(self, width="15", values=("Left Click","Right Click","Middle Click","Double Right Click","Double Left Click","Double Middle Click"))
-            
-            class TableDropDown(ttk.Combobox):
-                def __init__(self, parent):
-                    
-                    self.current_table = tk.StringVar() # create variable for table
-                    ttk.Combobox.__init__(self, parent)#  init widget
-                    self.config(textvariable = self.current_table, state = "readonly", values = ["Customers", "Pets", "Invoices", "Prices"])
-                    self.current(0) # index of values for current table
-                    self.place(x = 50, y = 50, anchor = "w") # place drop down box
-
-            ttk.Label(self, text="""Choose the left or
-right mouse button""", background="#e7dff2", anchor=E).grid(row=1, column=0)
-            self.cmb.grid(row=1, column=1, sticky="ew")
-            self.cmb.current(0)
-
-
-
-            
-    
-            
-            ttk.Label(self, text="ENTER X:", background="#e7dff2").grid(row=0, column=0)
-            self.inputY = ttk.Entry(self)
-            self.inputY.grid(row=0, column=3)
-            # Start Button ⬇
-            ttk.Button(self, text="start", command=self.startclick).grid(row=7, column=0)
-            # close button ⬇
-            ttk.Button(self, text="exit!", command=self.EXITME).grid(row=7, column=0)
-            self.inputhotkey = ttk.Entry(self)
-            self.inputhotkey.grid(row=1, column=3, columnspan=1)
-
-
-            def callback():
-                webbrowser.open_new(r"https://kai9987kai.github.io/AutoClicker.html")
-
-            def callback2():
-                webbrowser.open_new(r"https://github.com/kai9987kai/AutoClicker")
-
-            ttk.Button(self, text="ABOUT", command=callback).grid(row=5, column=3, sticky="ew")
-
-            def clicked3():
-                your_gui.destroy()
-                pyautogui.PAUSE = 0.50
-                pyautogui.FAILSAFE = True
-
-                things = []
-                root = Tk()
-                root.geometry("600x400")
-
-                list_box = Listbox(root, font=(12))
-                list_box.config(width=30, height=18)
-                list_box.place(x=0, y=0)
-
-                run_btn = ttk.Button(root, text="Run List", command=lambda: run_list())
-                run_btn.place(x=350, y=20)
-                run_btn.config(width=15)
-
-                del_btn = ttk.Button(root, text="Delete", command=lambda: delete(list_box))
-                del_btn.place(x=350, y=80)
-                del_btn.config(width=15)
-
-                add_btn = ttk.Button(root, text="Add", command=lambda: add())
-                add_btn.place(x=350, y=50)
-                add_btn.config(width=15)
-
-                x_txt = StringVar()
-                y_txt = StringVar()
-
-                x_label = Label(root, text="x", font=(12))
-                x_label.place(x=350, y=150)
-
-                x = ttk.Entry(root, textvariable=x_txt)
-                x.place(x=375, y=150)
-
-                x_txt.set('')
-                y_label = Label(root, text="y", font=(12))
-                y_label.place(x=350, y=170)
-
-                y = ttk.Entry(root, textvariable=y_txt)
-                y.place(x=375, y=180)
-                y_txt.set('')
-
-
-            
-                cmb = ttk.Combobox(root, width="15", values=("Left Click","Right Click","Middle Click","Double Right Click","Double Left Click","Double Middle Click"))
-                ttk.Label(root, text="""Select whether to right or
-left click the list""", anchor=E).place(x=350, y=250)
-                cmb.place(x=350, y=300)
-                cmb.current(0)
-                root.title("AutoClicker - list of coordinates")
-                try:
-                    root.iconbitmap(_resource_path("favicon.ico"))
-                except:
-                    pass
-                root.resizable(False, False)
-                root.attributes("-topmost", True)
-
-                def add():
-                    content_x = x_txt.get()
-                    content_y = y_txt.get()
-                    closed_str = [content_x, content_y]
-                    things.append(closed_str)
-                    list_box.delete(0, 'end')
-                    for i in range(len(things)):
-                        list_box.insert(END, things[i])
-
-                def run_list():
-                    
-                    x_cords = [item[0] for item in things]
-                    y_cords = [item[1] for item in things]
-
-                    for i in range(len(things)):
-                        
-                        if cmb.get() == "Left Click":
-                            screenWidth, screenHeight = pyautogui.size()
-                            currentMouseX, currentMouseY = pyautogui.position()
-                            pyautogui.moveTo(int(x_cords[i]), int(y_cords[i]))
-                            # print("Gonna Click",x_cords[i],y_cords[i])
-                            pyautogui.click()
-
-
-                        elif cmb.get() == "Right Click":
-                            
-                            screenWidth, screenHeight = pyautogui.size()
-                            currentMouseX, currentMouseY = pyautogui.position()
-                            pyautogui.moveTo(int(x_cords[i]), int(y_cords[i]))
-                            # print("Gonna Click",x_cords[i],y_cords[i])
-                            pyautogui.click(button='right')
-                            pyautogui.click()
-
-                        elif cmb.get() == "Middle Click":
-                            
-                            screenWidth, screenHeight = pyautogui.size()
-                            currentMouseX, currentMouseY = pyautogui.position()
-                            pyautogui.moveTo(int(x_cords[i]), int(y_cords[i]))
-                            # print("Gonna Click",x_cords[i],y_cords[i])
-                            pyautogui.click(button='middle')
-                            pyautogui.click()
-                        elif cmb.get() == "Double Right Click":
-                            
-                            screenWidth, screenHeight = pyautogui.size()
-                            currentMouseX, currentMouseY = pyautogui.position()
-                            pyautogui.moveTo(int(x_cords[i]), int(y_cords[i]))
-                            # print("Gonna Click",x_cords[i],y_cords[i])
-                            pyautogui.click(clicks=2)
-                            pyautogui.click(button='right')
-                            pyautogui.click()
-                        elif cmb.get() == "Double Left Click":
-                            
-                            screenWidth, screenHeight = pyautogui.size()
-                            currentMouseX, currentMouseY = pyautogui.position()
-                            pyautogui.moveTo(int(x_cords[i]), int(y_cords[i]))
-                            # print("Gonna Click",x_cords[i],y_cords[i])
-                            pyautogui.click(clicks=2)
-                            pyautogui.click(button='left')
-                            pyautogui.click()
-                        elif cmb.get() == "Double Middle Click":
-                            
-                            screenWidth, screenHeight = pyautogui.size()
-                            currentMouseX, currentMouseY = pyautogui.position()
-                            pyautogui.moveTo(int(x_cords[i]), int(y_cords[i]))
-                            # print("Gonna Click",x_cords[i],y_cords[i])
-                            pyautogui.click(clicks=2)
-                            pyautogui.click(button='middle')
-                            pyautogui.click()
-            
-                def delete(listbox):
-                    global things
-                    # Delete from Listbox
-                    selection = list_box.curselection()
-                    list_box.delete(selection[0])
-                    # Delete from list that provided it
-                    value = eval(list_box.get(selection[0]))
-                    ind = things.index(value)
-                    del (things[ind])
-
-                popup = Menu(root, tearoff=0)
-                popup.add_command(label='Run list', command=run_list)
-                popup.add_command(label='Exit', command=self.EXITME)
-
-                def do_popup(event):
-                    # display the popup menu
-                    try:
-                        popup.tk_popup(event.x_root, event.y_root, 0)
-                    finally:
-                        # make sure to release the grab (Tk 8.0a1 only)
-                        popup.grab_release()
-
-                root.bind("<Button-3>", do_popup)
-
-                root.mainloop()
-
-            def clicked():
-                Contact_Page()
-
-            def clicked2():
-                Mega_Spam()
-            def Finder():
-                Coordinates_Finder()
-                
-
-            ttk.Button(self, text="List Coordinates", command=clicked3).grid(row=7, column=3, sticky="ew")
-            ttk.Button(self, text="Find Coordinates", command=Finder).grid(row=6, column=3, sticky="ew")
-            ttk.Button(self, text="Advanced Colour Clicker", command=Colour_Clicker).grid(row=7, column=1, columnspan=2, sticky="ew", padx=4)
-
-            def settings():
-                window = Tk()
-                window.title("Settings")
-                window.geometry('330x115')
-                try:
-                    window.iconbitmap(_resource_path("favicon.ico"))
-                except:
-                    pass
-                window.resizable(False, False)
-                window.geometry("+0+0")
-                window.attributes("-topmost", True)
-
-
-                def callBackFunc():
-                    your_gui.overrideredirect(True)
-                    window.destroy()
-
-                def ExitWindow():
-                    window.destroy()
-
-                def Full_screen():
-                    your_gui.attributes('-fullscreen', True)
-                    your_gui.bind('<Escape>', lambda e: root.destroy())
-                    window.destroy()
-                def Exit_Full_Screen():
-                    python = sys.executable
-                    os.execl(python, python, * sys.argv)
-                def Show_Title_bar():
-                    python = sys.executable
-                    os.execl(python, python, * sys.argv)
-                
-
-                ttk.Label(window, text="Settings").grid(column=0, row=1, sticky="ew")
-                ttk.Button(window, text="               Exit Settings               ", command=ExitWindow).grid(column=0, row= 6)
-                ttk.Button(window, text="‍‍FullScreen", command=Full_screen).grid(column=0, row=3, sticky="ew")
-                ttk.Button(window, text="Exit FullScreen", command=Exit_Full_Screen).grid(column=1, row=3, sticky="ew")
-                ttk.Button(window, text="Hide Title Bar ", command=callBackFunc).grid(column=0, row=5, sticky="ew")
-                ttk.Button(window, text="Show Title Bar", command=Show_Title_bar).grid(column=1, row=5, sticky="ew")
-                ttk.Button(window, text="Restart program", command=Show_Title_bar).grid(column=1, row=6, sticky="ew")
-
-                popup = Menu(your_gui, tearoff=0)
-                popup.add_command(label="FullScreen", command=Full_screen)
-                popup.add_command(label="Exit FullScreen", command=Exit_Full_Screen)
-                popup.add_command(label="Hide Title Bar", command=callBackFunc)
-                popup.add_command(label="Show Title Bar", command=Show_Title_bar)
-                popup.add_command(label="Restart program", command=Show_Title_bar)
-                popup.add_command(label="Exit Settings", command=ExitWindow)
-
-                def do_popup(event):
-
-                    try:
-
-                        popup.tk_popup(event.x_root, event.y_root, 0)
-                    finally:
-                        popup.grab_release()
-
-                window.bind("<Button-3>", do_popup)
-
-                window.mainloop()
-
-            def OpenOldWindow():
-                your_gui.destroy()
-                OldStyleGUI()
-
-            # Menu Bar!! ⬇
-            menu = Menu(self)
-            new_item = Menu(menu)
-            new_item.add_command(label='About', command=callback)
-            new_item.add_command(label='Github Page', command=callback2)
-            new_item.add_command(label='Auto Clicker Mega Spam', command=clicked2)
-            new_item.add_command(label='Version Number', command=NOTIFICATION)
-            new_item.add_command(label='Old Style GUI', command=OpenOldWindow)
-            new_item.add_command(label='Settings', command=settings)
-            new_item.add_command(label='List of Coordinates', command=clicked3)
-            new_item.add_command(label='Coordinates Finder', command=Finder)
-            new_item.add_command(label='Send Feedback', command=feedback)
-            new_item.add_command(label='Advanced Colour Clicker', command=Colour_Clicker)
-            new_item.add_command(label='Locate and Click', command=Locate_Click)
-            new_item.add_command(label='Photo Clicker', command=Photo_Clicker)
-            new_item.add_separator()
-            new_item.add_command(label='Start', command=self.do_conversion)
-            new_item.add_command(label='Exit', command=self.EXITME)
-
-            menu.add_cascade(label='Menu', menu=new_item)
-            new_item2 = Menu(menu)
-            new_item2.add_command(label='Tutorial', command=tutorial)
-            menu.add_cascade(label='Help', menu=new_item2)
-            new_item2.add_command(label='Contact', command=clicked)
-            self.config(menu=menu)
-            tk.Label(self, text="Keyboard key to stop clicking:", background="#e7dff2").grid(row=1, column=2)
-            popup = Menu(self, tearoff=0)
-            popup.add_command(label="About", command=callback)  # , command=next) etc...
-            popup.add_command(label='GitHub Page', command=callback2)
-            popup.add_command(label='Send Feedback', command=feedback)
-            popup.add_command(label='Locate and Click', command=Locate_Click)
-            popup.add_command(label='Photo Clicker', command=Photo_Clicker)
-            popup.add_command(label='Auto Clicker Mega Spam', command=clicked2)
-            popup.add_command(label='Version Number', command=NOTIFICATION)
-            popup.add_command(label='Old Style Gui', command=OpenOldWindow)
-            popup.add_command(label='Settings', command=settings)
-            popup.add_command(label='List of coordinates', command=clicked3)
-            popup.add_command(label='Advanced Colour Clicker', command=Colour_Clicker)
-            popup.add_command(label='Find Coordinates', command=Finder)
-            popup.add_separator()
-            popup.add_command(label='Start', command=self.do_conversion)
-            popup.add_command(label='Exit', command=self.EXITME)
-
-            def do_popup(event):
-                # display the popup menu
-                try:
-                    popup.tk_popup(event.x_root, event.y_root, 0)
-                finally:
-                    # make sure to release the grab (Tk 8.0a1 only)
-                    popup.grab_release()
-
-            self.bind("<Button-3>", do_popup)
-
-
-        def _setup_tray(self):
-            try:
-                from PIL import Image
-                image = Image.open(_resource_path("favicon.ico"))
-                menu = (
-                    item('Restore', self._restore_from_tray),
-                    item('Start Clicker', self.startclick),
-                    item('Stop Clicker', self.stopclick),
-                    item('Exit', self.EXITME)
-                )
-                self.tray_icon = pystray.Icon("autoclicker", image, "AutoClicker", menu)
-                threading.Thread(target=self.tray_icon.run, daemon=True).start()
-            except:
-                pass
-
-        def _restore_from_tray(self, icon=None, item=None):
-            self.deiconify()
-            self.lift()
-            self.attributes("-topmost", True)
-
-        def _minimize_to_tray(self):
-            self.withdraw()
-            if not hasattr(self, 'tray_icon'):
-                self._setup_tray()
-
-        def EXITME(self):
-
-            YourGUI.destroy(self)
-
-        def startclick(self):
-            
-            x1 = threading.Thread(target=self.do_conversion, daemon=True)
-            x1.start()   
-        def do_conversion(self):
-
-     
-            if self.cmb.get() == "Left Click":
-                
-                y = self.inputY.get()
-                x = self.inputX.get()
-                    
-                running = True
-                try:
-                    
-                    x = int(x)
-                    y = int(y)
-                except:
-                    
-                    messagebox.showerror('Invalid point', 'Invalid point')
-                    YourGUI.destroy(self)
-                while running:
-                    pyautogui.FAILSAFE = False
-                    pyautogui.click(x, y)
-                    
-                    if keyboard.is_pressed(self.inputhotkey.get()):
-                        running = False
-                        
-                    
-                    
-                    num= int(self.inputdelayentry.get())
-                    start_time = datetime.datetime.now()
-                    while (datetime.datetime.now() - start_time).total_seconds() < num:
-                        
-                        if keyboard.is_pressed(self.inputhotkey.get()):
-                            exit(0)
-                        else:
-                            pass
-                                
-            elif self.cmb.get() == "Right Click":
-                
-                y = self.inputY.get()
-                x = self.inputX.get()
-                running = True
-                try:
-                    
-                    x = int(x)
-                    y = int(y)
-                except:
-
-                    messagebox.showerror('Invalid point', 'Invalid point')
-                    YourGUI.destroy(self)
-                        
-                while running:
-                    pyautogui.FAILSAFE = False # disables the fail-safe
-                    pyautogui.click(button='right')
-                    pyautogui.click(x, y)
-                    time.sleep(int(self.inputdelayentry.get()))
-                               
-
-            
-                    num= int(self.inputdelayentry.get())
-                    start_time = datetime.datetime.now()
-                    while (datetime.datetime.now() - start_time).total_seconds() < num:
-                        
-                        if keyboard.is_pressed(self.inputhotkey.get()):
-                            exit(0)
-                        else:
-                            pass
-                    
-                    
-                    if keyboard.is_pressed(self.inputhotkey.get()):
-                        break
-                    
-            
-            elif self.cmb.get() == "Middle Click":
-                y = self.inputY.get()
-                x = self.inputX.get()
-                running = True
-                try:
-                    x = int(x)
-                    y = int(y)
-                except:
-                    messagebox.showerror('Invalid point', 'Invalid point')
-                    YourGUI.destroy(self)
-                        
-                while running:
-                    pyautogui.FAILSAFE = False
-                    pyautogui.click(button='middle')
-                    pyautogui.click(x, y)
-                    time.sleep(int(self.inputdelayentry.get()))
-                               
-
-            
-                    num= int(self.inputdelayentry.get())
-                    start_time = datetime.datetime.now()
-                    while (datetime.datetime.now() - start_time).total_seconds() < num:
-                        if keyboard.is_pressed(self.inputhotkey.get()):
-                            exit(0)
-                    else:
-                        pass
-                    
-                    
-                    if keyboard.is_pressed(self.inputhotkey.get()):
-                        break
-            elif self.cmb.get() == "Double Right Click":
-                y = self.inputY.get()
-                x = self.inputX.get()
-                running = True
-                try:
-                    x = int(x)
-                    y = int(y)
-                except:
-                    messagebox.showerror('Invalid point', 'Invalid point')
-                    YourGUI.destroy(self)
-                        
-                while running:
-                    pyautogui.FAILSAFE = False
-                    pyautogui.click(clicks=2)
-                    pyautogui.click(button='right')
-                    pyautogui.click(x, y)
-                    time.sleep(int(self.inputdelayentry.get()))
-                               
-
-            
-                    num= int(self.inputdelayentry.get())
-                    start_time = datetime.datetime.now()
-                    while (datetime.datetime.now() - start_time).total_seconds() < num:
-                        if keyboard.is_pressed(self.inputhotkey.get()):
-                            exit(0)
-                    else:
-                        pass
-                    
-                    
-                    if keyboard.is_pressed(self.inputhotkey.get()):
-                        break
-            elif self.cmb.get() == "Double Left Click":
-                y = self.inputY.get()
-                x = self.inputX.get()
-                running = True
-                try:
-                    x = int(x)
-                    y = int(y)
-                except:
-                    messagebox.showerror('Invalid point', 'Invalid point')
-                    YourGUI.destroy(self)
-                        
-                while running:
-                    pyautogui.FAILSAFE = False
-                    pyautogui.click(clicks=2)
-                    pyautogui.click(button='left')
-                    pyautogui.click(x, y)
-                    time.sleep(int(self.inputdelayentry.get()))
-                               
-
-            
-                    num= int(self.inputdelayentry.get())
-                    start_time = datetime.datetime.now()
-                    while (datetime.datetime.now() - start_time).total_seconds() < num:
-                        if keyboard.is_pressed(self.inputhotkey.get()):
-                            exit(0)
-                    else:
-                        pass
-                    
-                    
-                    if keyboard.is_pressed(self.inputhotkey.get()):
-                        break
-            elif self.cmb.get() == "Double Middle Click":
-                y = self.inputY.get()
-                x = self.inputX.get()
-                running = True
-                try:
-                    x = int(x)
-                    y = int(y)
-                except:
-                    messagebox.showerror('Invalid point', 'Invalid point')
-                    YourGUI.destroy(self)
-                        
-                while running:
-                    pyautogui.FAILSAFE = False
-                    pyautogui.click(clicks=2)
-                    pyautogui.click(button='middle')
-                    pyautogui.click(x, y)
-                    time.sleep(int(self.inputdelayentry.get()))
-                               
-
-            
-                    num= int(self.inputdelayentry.get())
-                    start_time = datetime.datetime.now()
-                    while (datetime.datetime.now() - start_time).total_seconds() < num:
-                        if keyboard.is_pressed(self.inputhotkey.get()):
-                            exit(0)
-                    else:
-                        pass
-                    
-                    
-                    if keyboard.is_pressed(self.inputhotkey.get()):
-                        break
-            def action():
-                YourGUI.destroy()
-
-
-        def getdelay(self):
-            tx = self.getinputdelayentry.get()
-
-        def do_hotkey(self):
-            hotkey = self.inputhotkey.get()
-
-    if __name__ == '__main__':
-        your_gui = YourGUI()
-        your_gui.geometry("+300+300")
-        your_gui.attributes("-topmost", True)
-        your_gui.title('AutoClicker')  # Set title
-        try:
-            your_gui.iconbitmap(_resource_path("favicon.ico"))
-        except:
-            pass
-        your_gui.resizable(False, False)
-        your_gui.configure(background="#e7dff2")
-        your_gui.mainloop()
-    time.sleep(0)
 
 def MAINWINDOW_REDESIGNED():
     if not _ensure_dependencies("AutoClicker Control Center", ["pyautogui", "keyboard"]):
         return
     class YourGUI(tk.Tk):
         CLICK_TYPES = DEFAULT_CLICK_TYPES
+        ACTION_TYPES = ACTION_REGISTRY
         DELAY_PRESETS = ("0.00", "0.05", "0.10", "0.25", "0.50")
+        CPS_PRESETS = ("2", "5", "10", "20", "50")
+        # Build-time colour -> palette role. Resolved once per widget (see _apply_theme).
+        BG_ROLE_SENTINELS = {
+            "#dbe7f2": "main_bg",
+            "#f8fafc": "card_bg",
+            "#edf4ff": "alt_bg",
+            "#0f172a": "hero_bg",
+            "#1e293b": "hero_chip_bg",
+            "white": "list_bg",
+        }
+        FG_ROLE_SENTINELS = {
+            "#0f172a": "text",
+            "#475569": "sub",
+            "white": "hero_fg",
+            "#f8fafc": "hero_fg",
+            "#cbd5e1": "hero_sub",
+            "#334155": "sub",
+            "#0f766e": "accent",
+        }
 
         def __init__(self):
             tk.Tk.__init__(self)
@@ -4172,12 +3306,23 @@ def MAINWINDOW_REDESIGNED():
 
             self.worker_thread = None
             self.sequence_thread = None
+            # One Event per subsystem. A single shared Event let a finishing worker
+            # clear the flag out from under a still-running one, resurrecting a stopped run.
             self.stop_event = threading.Event()
+            self.sequence_stop_event = threading.Event()
+            self.playback_stop_event = threading.Event()
+            self.pause_event = threading.Event()
+            self.run_generation = 0
+            self.active_run_generation = 0
             self.ui_queue = queue.Queue()
             self.stop_reason = "idle"
             self.hotkey_notified = False
             self.was_minimized_for_run = False
             self.active_run_was_dry_run = False
+            self.rate_samples = []
+            self.global_hotkey_handles = {}
+            self.lifetime_stats = {"runs": 0, "actions": 0, "seconds": 0.0}
+            self._theme_roles = {}
 
             self.target_x_var = tk.StringVar(value="0")
             self.target_y_var = tk.StringVar(value="0")
@@ -4221,6 +3366,27 @@ def MAINWINDOW_REDESIGNED():
             self.recording_summary_var = tk.StringVar(value="Recording: 0 point(s) | idle")
             self.window_summary_var = tk.StringVar(value="")
             self.preset_summary_var = tk.StringVar(value="")
+
+            # V11 additions: richer action vocabulary, pacing, scheduling and telemetry.
+            self.action_key_var = tk.StringVar(value=ACTION_DEFAULTS["action_key"])
+            self.action_text_var = tk.StringVar(value=ACTION_DEFAULTS["action_text"])
+            self.scroll_amount_var = tk.StringVar(value=str(ACTION_DEFAULTS["scroll_amount"]))
+            self.hold_duration_var = tk.StringVar(value=f"{ACTION_DEFAULTS['hold_duration']:.2f}")
+            self.drag_to_x_var = tk.StringVar(value="0")
+            self.drag_to_y_var = tk.StringVar(value="0")
+            self.pacing_mode_var = tk.StringVar(value="Precise")
+            self.scheduled_start_var = tk.StringVar(value="")
+            self.target_cps_var = tk.StringVar(value="")
+            self.round_robin_var = tk.BooleanVar(value=False)
+            self.global_hotkeys_var = tk.BooleanVar(value=False)
+            self.start_hotkey_var = tk.StringVar(value="ctrl+shift+s")
+            self.pause_hotkey_var = tk.StringVar(value="ctrl+shift+p")
+            self.capture_hotkey_var = tk.StringVar(value="ctrl+shift+c")
+            self.live_rate_var = tk.StringVar(value="Rate: idle")
+            self.lifetime_stats_var = tk.StringVar(value="Lifetime: 0 run(s) | 0 action(s) | 0.00s")
+            self.action_params_var = tk.StringVar(value="")
+            self.hotkey_status_var = tk.StringVar(value="Global hotkeys are off.")
+
             self.profile_file = _state_file_path(PROFILE_FILE_NAME)
             self.workspace_file = _state_file_path(WORKSPACE_FILE_NAME)
             self.saved_profiles = {}
@@ -4248,6 +3414,9 @@ def MAINWINDOW_REDESIGNED():
             self._build_menu()
             self._build_layout()
             self._build_context_menu()
+            # Snapshot each widget's build-time colour role while the tree is still in its
+            # authored Light palette; _apply_theme then maps roles, never live colours.
+            self._capture_theme_roles()
             self._load_profiles_from_disk()
             self._load_workspace_from_disk()
             self._apply_window_preferences()
@@ -4256,16 +3425,255 @@ def MAINWINDOW_REDESIGNED():
             self._append_activity("Control Center ready.")
 
             self.bind("<Button-3>", self._show_context_menu)
-            self.bind("<Return>", lambda _event: self.startclick())
+            # Enter used to be bound on the root, so pressing it in any entry field launched a
+            # live uncapped run and immediately minimised the window. It is now scoped to Start.
+            self.bind("<F5>", lambda _event: self.startclick())
+            self.bind("<F6>", lambda _event: self.toggle_pause())
+            self.bind("<Escape>", lambda _event: self.stopclick())
             self.protocol("WM_DELETE_WINDOW", self._handle_close_request)
             self.after(100, self._pump_ui_queue)
             self.after(200, self._refresh_live_cursor)
             self.after(50, self._apply_theme)
-            
-            # Global Emergency Kill-Switch
+            self._refresh_run_buttons()
+            self._load_lifetime_stats()
+
+            # Emergency kill-switch. It now persists the workspace before exiting rather than
+            # tearing the process down with os._exit and losing every unsaved change.
             try:
-                self.emergency_hotkey_handle = keyboard.add_hotkey("ctrl+shift+k", lambda: os._exit(0))
-            except: pass
+                self.emergency_hotkey_handle = keyboard.add_hotkey("ctrl+shift+k", self._emergency_stop)
+            except Exception:
+                self.emergency_hotkey_handle = None
+
+        def _emergency_stop(self):
+            """Halt everything immediately, then save state and quit from the Tk thread."""
+            self.pause_event.clear()
+            for event in (self.stop_event, self.sequence_stop_event, self.playback_stop_event):
+                event.set()
+            self.stop_reason = "emergency"
+            try:
+                self.after(0, self._emergency_finalize)
+            except Exception:
+                os._exit(0)
+
+        def _emergency_finalize(self):
+            try:
+                self._append_activity("Emergency stop hotkey used.")
+                self._persist_workspace_state()
+            except Exception:
+                pass
+            try:
+                self.EXITME()
+            except Exception:
+                os._exit(0)
+
+        def _load_lifetime_stats(self):
+            """Seed lifetime totals from the on-disk run log so they survive restarts."""
+            try:
+                summary = _summarize_run_history(_read_run_log(_state_file_location(RUN_LOG_FILE_NAME)))
+                self.lifetime_stats = {
+                    "runs": summary["runs"],
+                    "actions": summary["actions"],
+                    "seconds": summary["seconds"],
+                }
+            except Exception:
+                pass
+
+        def _register_global_hotkeys(self):
+            """Bind start / pause / stop / capture to system-wide hotkeys."""
+            self._unregister_global_hotkeys()
+            if keyboard is None:
+                self.hotkey_status_var.set("Global hotkeys need the 'keyboard' package.")
+                return
+            bindings = {
+                "start": (self.start_hotkey_var.get().strip(), lambda: self.after(0, self.startclick)),
+                "pause": (self.pause_hotkey_var.get().strip(), lambda: self.after(0, self.toggle_pause)),
+                "capture": (self.capture_hotkey_var.get().strip(), lambda: self.after(0, self._capture_cursor_position)),
+            }
+            registered, problems = [], []
+            for name, (hotkey, callback) in bindings.items():
+                if not hotkey:
+                    continue
+                check = _validate_hotkey(hotkey)
+                if not check["valid"]:
+                    problems.append(f"{name}: {check['reason']}")
+                    continue
+                try:
+                    self.global_hotkey_handles[name] = keyboard.add_hotkey(hotkey, callback)
+                    registered.append(f"{name}={hotkey}")
+                except Exception as exc:
+                    problems.append(f"{name}: {exc}")
+
+            if registered and not problems:
+                self.hotkey_status_var.set("Global hotkeys active: " + ", ".join(registered))
+            elif registered:
+                self.hotkey_status_var.set("Active: " + ", ".join(registered) + " | Failed: " + "; ".join(problems))
+            else:
+                self.hotkey_status_var.set("No global hotkeys registered. " + "; ".join(problems))
+            self._append_activity(self.hotkey_status_var.get())
+
+        def _unregister_global_hotkeys(self):
+            for handle in list(self.global_hotkey_handles.values()):
+                try:
+                    keyboard.remove_hotkey(handle)
+                except Exception:
+                    pass
+            self.global_hotkey_handles = {}
+
+        def _toggle_global_hotkeys(self):
+            if self.global_hotkeys_var.get():
+                self._register_global_hotkeys()
+            else:
+                self._unregister_global_hotkeys()
+                self.hotkey_status_var.set("Global hotkeys are off.")
+            self._schedule_workspace_save()
+
+        def _apply_target_cps(self):
+            """Convert the clicks-per-second box into the delay the engine actually uses."""
+            delay = _cps_to_delay(self.target_cps_var.get())
+            if delay is None:
+                messagebox.showerror("Target rate", "Enter a clicks-per-second value greater than zero.", parent=self)
+                return
+            self.delay_var.set(f"{delay:.4f}".rstrip("0").rstrip(".") or "0")
+            self.status_var.set(f"Delay set to {delay:.4f}s for {float(self.target_cps_var.get()):.2f} action(s)/sec.")
+            self._update_plan_summary()
+
+        def _sync_cps_from_delay(self):
+            cps = _delay_to_cps(self.delay_var.get())
+            self.target_cps_var.set("" if cps is None else f"{cps:.2f}")
+
+        def _refresh_action_params(self, *_args):
+            """Tell the user which Action Setup fields the selected action actually reads."""
+            action_name = self.click_mode_var.get()
+            spec = ACTION_REGISTRY.get(action_name)
+            if not spec:
+                self.action_params_var.set("")
+                return
+            labels = {
+                "action_key": "Key name",
+                "action_text": "Text to type",
+                "scroll_amount": "Scroll notches",
+                "hold_duration": "Hold seconds",
+                "drag_to_x": "Drag to X",
+                "drag_to_y": "Drag to Y",
+            }
+            uses = [labels.get(name, name) for name in spec.get("uses", ())]
+            if uses:
+                self.action_params_var.set(f"{action_name} uses: {', '.join(uses)} (see Action Setup).")
+            elif spec["kind"] == "click":
+                self.action_params_var.set(f"{action_name} sends {spec['clicks']} {spec['button']} click(s) at the target.")
+            else:
+                self.action_params_var.set(f"{action_name} needs no extra parameters.")
+
+        def _capture_drag_target(self):
+            try:
+                x_pos, y_pos = pyautogui.position()
+            except Exception as exc:
+                self.status_var.set(f"Unable to read the cursor position: {exc}")
+                return
+            self.drag_to_x_var.set(str(int(x_pos)))
+            self.drag_to_y_var.set(str(int(y_pos)))
+            self.status_var.set(f"Drag target set to {int(x_pos)}, {int(y_pos)}.")
+
+        def _open_run_history(self):
+            """Browse the persistent run log with lifetime totals."""
+            palette = self._theme_palette()
+            window = tk.Toplevel(self)
+            window.title("Run History")
+            window.geometry("760x560+300+170")
+            window.minsize(560, 420)
+            window.attributes("-topmost", True)
+            window.configure(bg=palette["card_bg"])
+            try:
+                window.iconbitmap(_resource_path("favicon.ico"))
+            except Exception:
+                pass
+
+            window.columnconfigure(0, weight=1)
+            window.rowconfigure(1, weight=1)
+
+            summary_var = tk.StringVar(value="")
+            tk.Label(window, textvariable=summary_var, bg=palette["card_bg"], fg=palette["text"],
+                     font=("Segoe UI", 10, "bold"), wraplength=700, justify=LEFT).grid(row=0, column=0, sticky="ew", padx=16, pady=(16, 8))
+
+            text_frame = tk.Frame(window, bg=palette["card_bg"])
+            text_frame.grid(row=1, column=0, sticky="nsew", padx=16)
+            text_frame.columnconfigure(0, weight=1)
+            text_frame.rowconfigure(0, weight=1)
+            history_text = tk.Text(text_frame, wrap="none", bg=palette["list_bg"], fg=palette["list_fg"],
+                                   font=("Consolas", 9), relief="flat")
+            history_text.grid(row=0, column=0, sticky="nsew")
+            scroll = ttk.Scrollbar(text_frame, orient="vertical", command=history_text.yview)
+            scroll.grid(row=0, column=1, sticky="ns")
+            history_text.configure(yscrollcommand=scroll.set)
+
+            def refresh():
+                log_path = _state_file_location(RUN_LOG_FILE_NAME)
+                records = _read_run_log(log_path)
+                summary = _summarize_run_history(records)
+                summary_var.set(
+                    f"{summary['runs']} run(s) logged ({summary['live_runs']} live, {summary['dry_runs']} dry) | "
+                    f"{summary['actions']} action(s) | {_format_seconds(summary['seconds'])} | "
+                    f"{summary['average_cps']:.2f} action(s)/sec average"
+                )
+                lines = [f"Log file: {log_path}", ""]
+                if not records:
+                    lines.append("No runs recorded yet. Finish a run and it will appear here.")
+                for record in reversed(records):
+                    lines.append(
+                        f"{record.get('finished_at', '?'):<20} "
+                        f"{'DRY ' if record.get('dry_run') else 'LIVE'} "
+                        f"{str(record.get('click_mode', '?')):<20} "
+                        f"{record.get('actions', 0):>8} action(s)  "
+                        f"{float(record.get('elapsed_seconds', 0) or 0):>9.2f}s  "
+                        f"{record.get('stop_reason', '?')}"
+                    )
+                history_text.configure(state="normal")
+                history_text.delete("1.0", END)
+                history_text.insert("1.0", "\n".join(lines))
+                history_text.configure(state="disabled")
+
+            def export_history():
+                export_path = filedialog.asksaveasfilename(
+                    defaultextension=".json", filetypes=[("JSON files", "*.json")], parent=window,
+                    initialfile=f"autoclicker-run-history-{datetime.datetime.now():%Y%m%d-%H%M%S}.json",
+                )
+                if not export_path:
+                    return
+                records = _read_run_log(_state_file_location(RUN_LOG_FILE_NAME))
+                try:
+                    _atomic_write_json(export_path, {
+                        "app_version": APP_VERSION,
+                        "schema_version": STATE_SCHEMA_VERSION,
+                        "summary": _summarize_run_history(records),
+                        "runs": records,
+                    }, sort_keys=True)
+                except Exception as exc:
+                    messagebox.showerror("Export failed", f"Unable to export run history.\n{exc}", parent=window)
+                    return
+                self._append_activity(f"Run history exported to {os.path.basename(export_path)}.")
+                messagebox.showinfo("Run history", f"Exported to:\n{export_path}", parent=window)
+
+            def clear_history():
+                if not messagebox.askyesno("Run history", "Archive the current run log and start a fresh one?", parent=window):
+                    return
+                log_path = _state_file_location(RUN_LOG_FILE_NAME)
+                if _rotate_run_log(log_path):
+                    self.lifetime_stats = {"runs": 0, "actions": 0, "seconds": 0.0}
+                    self._append_activity("Run history archived.")
+                    refresh()
+                else:
+                    messagebox.showerror("Run history", "Unable to archive the run log.", parent=window)
+
+            button_row = tk.Frame(window, bg=palette["card_bg"])
+            button_row.grid(row=2, column=0, sticky="ew", padx=16, pady=16)
+            for index in range(4):
+                button_row.columnconfigure(index, weight=1)
+            ttk.Button(button_row, text="Refresh", style="Secondary.TButton", command=refresh).grid(row=0, column=0, sticky="ew")
+            ttk.Button(button_row, text="Export JSON", style="Secondary.TButton", command=export_history).grid(row=0, column=1, sticky="ew", padx=(8, 0))
+            ttk.Button(button_row, text="Archive Log", style="Secondary.TButton", command=clear_history).grid(row=0, column=2, sticky="ew", padx=(8, 0))
+            ttk.Button(button_row, text="Close", style="Secondary.TButton", command=window.destroy).grid(row=0, column=3, sticky="ew", padx=(8, 0))
+
+            refresh()
 
         def _configure_window(self):
             self.title("AutoClicker Control Center")
@@ -4287,7 +3695,38 @@ def MAINWINDOW_REDESIGNED():
             self._refresh_ttk_styles(self._theme_palette())
 
         def _theme_palette(self):
-            if self.theme_var.get() == "Dark":
+            theme_name = self.theme_var.get()
+            if theme_name == "System":
+                theme_name = _detect_system_theme()
+            if theme_name == "Midnight":
+                return {
+                    "main_bg": "#08070f",
+                    "card_bg": "#15131f",
+                    "alt_bg": "#100e1a",
+                    "hero_bg": "#050410",
+                    "hero_chip_bg": "#221f33",
+                    "hero_fg": "#f8fafc",
+                    "hero_sub": "#cbd5e1",
+                    "text": "#f8fafc",
+                    "sub": "#cbd5e1",
+                    "accent": "#a78bfa",
+                    "accent_active": "#7c3aed",
+                    "danger": "#fb7185",
+                    "danger_active": "#e11d48",
+                    "secondary_bg": "#2a2740",
+                    "secondary_active": "#3b3757",
+                    "secondary_fg": "#ede9fe",
+                    "chip_bg": "#15131f",
+                    "chip_fg": "#c4b5fd",
+                    "chip_active": "#221f33",
+                    "border": "#3b3757",
+                    "status_bg": "#050410",
+                    "status_fg": "#ddd6fe",
+                    "list_bg": "#100e1a",
+                    "list_fg": "#f8fafc",
+                    "select_bg": "#7c3aed",
+                }
+            if theme_name == "Dark":
                 return {
                     "main_bg": "#0f172a",
                     "card_bg": "#1e293b",
@@ -4315,7 +3754,7 @@ def MAINWINDOW_REDESIGNED():
                     "list_fg": "#f8fafc",
                     "select_bg": "#0f766e",
                 }
-            if self.theme_var.get() == "Ocean":
+            if theme_name == "Ocean":
                 return {
                     "main_bg": "#d8edf2",
                     "card_bg": "#f4fbfd",
@@ -4508,6 +3947,7 @@ def MAINWINDOW_REDESIGNED():
                 "Precision": "Slower, cleaner clicks with zero jitter and zero delay variance.",
                 "Burst Sprint": "Short, aggressive output tuned for bursts and rapid button spam.",
                 "Human Mimic": "More natural timing, broader jitter, and optional micro-break pacing.",
+                "Feather Touch": "Very slow, single clean action per second for fragile or laggy UIs.",
             }
             self.preset_summary_var.set(
                 descriptions.get(self.behaviour_preset_var.get(), "Custom run profile.")
@@ -4551,6 +3991,15 @@ def MAINWINDOW_REDESIGNED():
                     "human_like": True,
                     "micro_pause_every": "10",
                     "micro_pause_duration": "0.40",
+                },
+                "Feather Touch": {
+                    "delay": "1.00",
+                    "delay_variance": "0.10",
+                    "jitter_x": "0",
+                    "jitter_y": "0",
+                    "human_like": True,
+                    "micro_pause_every": "0",
+                    "micro_pause_duration": "0.00",
                 },
             }
 
@@ -4642,24 +4091,30 @@ def MAINWINDOW_REDESIGNED():
 
             self.start_button = ttk.Button(command_strip, text="Start", style="Accent.TButton", command=self.startclick)
             self.start_button.grid(row=0, column=0, sticky="ew")
+            self.start_button.bind("<Return>", lambda _event: self.startclick())
+            self.pause_button = ttk.Button(command_strip, text="Pause", style="Secondary.TButton", command=self.toggle_pause, state=DISABLED)
+            self.pause_button.grid(row=0, column=1, sticky="ew", padx=(8, 0))
             self.stop_button = ttk.Button(command_strip, text="Stop", style="Danger.TButton", command=self.stopclick, state=DISABLED)
-            self.stop_button.grid(row=0, column=1, sticky="ew", padx=(8, 0))
-            ttk.Button(command_strip, text="Capture Cursor", style="Secondary.TButton", command=self._capture_cursor_position).grid(row=0, column=2, sticky="ew", padx=(8, 0))
-            ttk.Button(command_strip, text="Validate Plan", style="Secondary.TButton", command=self._validate_current_plan).grid(row=0, column=3, sticky="ew", padx=(8, 0))
-            ttk.Checkbutton(command_strip, text="Dry Run", variable=self.dry_run_var, style="Command.TCheckbutton").grid(row=0, column=4, sticky="w", padx=(12, 0))
-            ttk.Checkbutton(command_strip, text="Fail-safe", variable=self.pyautogui_failsafe_var, style="Command.TCheckbutton").grid(row=0, column=5, sticky="w", padx=(12, 0))
-            ttk.Button(command_strip, text="Safety Guard", style="Secondary.TButton", command=lambda: self._set_dropdown_state("safety_guard", True)).grid(row=0, column=6, sticky="ew", padx=(8, 0))
+            self.stop_button.grid(row=0, column=2, sticky="ew", padx=(8, 0))
+            ttk.Button(command_strip, text="Capture Cursor", style="Secondary.TButton", command=self._capture_cursor_position).grid(row=0, column=3, sticky="ew", padx=(8, 0))
+            ttk.Button(command_strip, text="Validate Plan", style="Secondary.TButton", command=self._validate_current_plan).grid(row=0, column=4, sticky="ew", padx=(8, 0))
+            ttk.Checkbutton(command_strip, text="Dry Run", variable=self.dry_run_var, style="Command.TCheckbutton").grid(row=0, column=5, sticky="w", padx=(12, 0))
+            ttk.Checkbutton(command_strip, text="Fail-safe", variable=self.pyautogui_failsafe_var, style="Command.TCheckbutton").grid(row=0, column=6, sticky="w", padx=(12, 0))
             ttk.Button(command_strip, text="Window Settings", style="Secondary.TButton", command=self._open_settings_window).grid(row=0, column=7, sticky="ew", padx=(8, 0))
             ttk.Button(command_strip, text="Expand All", style="Secondary.TButton", command=self._expand_all_sections).grid(row=1, column=0, sticky="ew", pady=(8, 0))
             ttk.Button(command_strip, text="Collapse Extras", style="Secondary.TButton", command=self._collapse_all_sections).grid(row=1, column=1, sticky="ew", padx=(8, 0), pady=(8, 0))
-            self.command_preset_combo = ttk.Combobox(command_strip, textvariable=self.behaviour_preset_var, values=("Balanced", "Precision", "Burst Sprint", "Human Mimic"), state="readonly")
+            self.command_preset_combo = ttk.Combobox(command_strip, textvariable=self.behaviour_preset_var, values=tuple(sorted(PROFILE_ENUM_FIELDS["behaviour_preset"])), state="readonly")
             self.command_preset_combo.grid(row=1, column=2, columnspan=2, sticky="ew", padx=(8, 0), pady=(8, 0))
             ttk.Button(command_strip, text="Apply Preset", style="Secondary.TButton", command=self._apply_behaviour_preset).grid(row=1, column=4, sticky="ew", padx=(8, 0), pady=(8, 0))
-            ttk.Button(command_strip, text="Health Check", style="Secondary.TButton", command=self._open_health_dashboard).grid(row=1, column=5, sticky="ew", padx=(8, 0), pady=(8, 0))
-            ttk.Button(command_strip, text="Session Report", style="Secondary.TButton", command=self._export_session_report).grid(row=1, column=6, sticky="ew", padx=(8, 0), pady=(8, 0))
-            ttk.Button(command_strip, text="State Folder", style="Secondary.TButton", command=self._open_state_folder).grid(row=1, column=7, sticky="ew", padx=(8, 0), pady=(8, 0))
-            tk.Label(command_strip, textvariable=self.safety_status_var, bg="#edf4ff", fg="#334155", font=("Segoe UI", 9, "bold"), wraplength=1030, justify=LEFT).grid(row=2, column=0, columnspan=8, sticky="w", pady=(10, 0))
-            tk.Label(command_strip, textvariable=self.preset_summary_var, bg="#edf4ff", fg="#0f766e", font=("Segoe UI", 9, "bold"), wraplength=1030, justify=LEFT).grid(row=3, column=0, columnspan=8, sticky="w", pady=(4, 0))
+            ttk.Button(command_strip, text="Safety Guard", style="Secondary.TButton", command=lambda: self._set_dropdown_state("safety_guard", True)).grid(row=1, column=5, sticky="ew", padx=(8, 0), pady=(8, 0))
+            ttk.Button(command_strip, text="Health Check", style="Secondary.TButton", command=self._open_health_dashboard).grid(row=1, column=6, sticky="ew", padx=(8, 0), pady=(8, 0))
+            ttk.Button(command_strip, text="Run History", style="Secondary.TButton", command=self._open_run_history).grid(row=1, column=7, sticky="ew", padx=(8, 0), pady=(8, 0))
+            ttk.Button(command_strip, text="Session Report", style="Secondary.TButton", command=self._export_session_report).grid(row=2, column=0, sticky="ew", pady=(8, 0))
+            ttk.Button(command_strip, text="State Folder", style="Secondary.TButton", command=self._open_state_folder).grid(row=2, column=1, sticky="ew", padx=(8, 0), pady=(8, 0))
+            tk.Label(command_strip, textvariable=self.live_rate_var, bg="#edf4ff", fg="#0f766e", font=("Segoe UI", 10, "bold")).grid(row=2, column=2, columnspan=3, sticky="w", padx=(12, 0), pady=(8, 0))
+            tk.Label(command_strip, textvariable=self.lifetime_stats_var, bg="#edf4ff", fg="#475569", font=("Segoe UI", 9)).grid(row=2, column=5, columnspan=3, sticky="w", padx=(12, 0), pady=(8, 0))
+            tk.Label(command_strip, textvariable=self.safety_status_var, bg="#edf4ff", fg="#334155", font=("Segoe UI", 9, "bold"), wraplength=1030, justify=LEFT).grid(row=3, column=0, columnspan=8, sticky="w", pady=(10, 0))
+            tk.Label(command_strip, textvariable=self.preset_summary_var, bg="#edf4ff", fg="#0f766e", font=("Segoe UI", 9, "bold"), wraplength=1030, justify=LEFT).grid(row=4, column=0, columnspan=8, sticky="w", pady=(4, 0))
 
             workspace = tk.Frame(shell, bg="#dbe7f2")
             workspace.grid(row=2, column=0, sticky="nsew", pady=(16, 0))
@@ -4693,9 +4148,10 @@ def MAINWINDOW_REDESIGNED():
             ttk.Button(quick_body, text="Use Current Cursor", style="Secondary.TButton", command=self._capture_cursor_position).grid(row=1, column=0, columnspan=2, sticky="ew", pady=(0, 8))
             ttk.Button(quick_body, text="Swap X / Y", style="Secondary.TButton", command=self._swap_coordinates).grid(row=1, column=2, columnspan=2, sticky="ew", padx=(14, 0), pady=(0, 8))
 
-            tk.Label(quick_body, text="Click type", bg="#f8fafc", fg="#0f172a", font=("Segoe UI", 10, "bold")).grid(row=2, column=0, sticky="w", pady=(0, 6))
-            self.click_type_combo = ttk.Combobox(quick_body, textvariable=self.click_mode_var, values=tuple(self.CLICK_TYPES.keys()), state="readonly")
+            tk.Label(quick_body, text="Action type", bg="#f8fafc", fg="#0f172a", font=("Segoe UI", 10, "bold")).grid(row=2, column=0, sticky="w", pady=(0, 6))
+            self.click_type_combo = ttk.Combobox(quick_body, textvariable=self.click_mode_var, values=tuple(ACTION_REGISTRY.keys()), state="readonly")
             self.click_type_combo.grid(row=2, column=1, sticky="ew", pady=(0, 6))
+            self.click_type_combo.bind("<<ComboboxSelected>>", self._refresh_action_params)
             tk.Label(quick_body, text="Repeat mode", bg="#f8fafc", fg="#0f172a", font=("Segoe UI", 10, "bold")).grid(row=2, column=2, sticky="w", padx=(14, 0), pady=(0, 6))
             self.repeat_mode_combo = ttk.Combobox(quick_body, textvariable=self.repeat_mode_var, values=("Infinite", "Burst Count"), state="readonly")
             self.repeat_mode_combo.grid(row=2, column=3, sticky="ew", pady=(0, 6))
@@ -4705,6 +4161,38 @@ def MAINWINDOW_REDESIGNED():
             self.repeat_count_entry.grid(row=3, column=1, sticky="ew", pady=(0, 6))
             tk.Label(quick_body, text="Stop hotkey", bg="#f8fafc", fg="#0f172a", font=("Segoe UI", 10, "bold")).grid(row=3, column=2, sticky="w", padx=(14, 0), pady=(0, 6))
             ttk.Entry(quick_body, textvariable=self.stop_hotkey_var).grid(row=3, column=3, sticky="ew", pady=(0, 6))
+            tk.Label(quick_body, textvariable=self.action_params_var, bg="#f8fafc", fg="#0f766e", font=("Segoe UI", 9), wraplength=560, justify=LEFT).grid(row=4, column=0, columnspan=4, sticky="w", pady=(2, 0))
+
+            action_card, action_body = self._create_dropdown_section(
+                left_stack,
+                "action_setup",
+                "Action Setup",
+                "Parameters for keyboard, scroll, hold and drag actions.",
+            )
+            action_card.grid(row=1, column=0, sticky="ew", pady=(12, 0))
+            action_body.columnconfigure(1, weight=1)
+            action_body.columnconfigure(3, weight=1)
+
+            tk.Label(action_body, text="Key name", bg="#f8fafc", fg="#0f172a", font=("Segoe UI", 10, "bold")).grid(row=0, column=0, sticky="w", pady=(0, 6))
+            ttk.Entry(action_body, textvariable=self.action_key_var).grid(row=0, column=1, sticky="ew", pady=(0, 6))
+            tk.Label(action_body, text="Hold seconds", bg="#f8fafc", fg="#0f172a", font=("Segoe UI", 10, "bold")).grid(row=0, column=2, sticky="w", padx=(14, 0), pady=(0, 6))
+            ttk.Entry(action_body, textvariable=self.hold_duration_var).grid(row=0, column=3, sticky="ew", pady=(0, 6))
+
+            tk.Label(action_body, text="Text to type", bg="#f8fafc", fg="#0f172a", font=("Segoe UI", 10, "bold")).grid(row=1, column=0, sticky="w", pady=(0, 6))
+            ttk.Entry(action_body, textvariable=self.action_text_var).grid(row=1, column=1, columnspan=3, sticky="ew", pady=(0, 6))
+
+            tk.Label(action_body, text="Scroll notches", bg="#f8fafc", fg="#0f172a", font=("Segoe UI", 10, "bold")).grid(row=2, column=0, sticky="w", pady=(0, 6))
+            ttk.Entry(action_body, textvariable=self.scroll_amount_var).grid(row=2, column=1, sticky="ew", pady=(0, 6))
+            tk.Label(action_body, text="Drag to X / Y", bg="#f8fafc", fg="#0f172a", font=("Segoe UI", 10, "bold")).grid(row=2, column=2, sticky="w", padx=(14, 0), pady=(0, 6))
+            drag_row = tk.Frame(action_body, bg="#f8fafc")
+            drag_row.grid(row=2, column=3, sticky="ew", pady=(0, 6))
+            drag_row.columnconfigure(0, weight=1)
+            drag_row.columnconfigure(1, weight=1)
+            ttk.Entry(drag_row, textvariable=self.drag_to_x_var, width=8).grid(row=0, column=0, sticky="ew")
+            ttk.Entry(drag_row, textvariable=self.drag_to_y_var, width=8).grid(row=0, column=1, sticky="ew", padx=(6, 0))
+
+            ttk.Button(action_body, text="Use Cursor As Drag Target", style="Secondary.TButton", command=self._capture_drag_target).grid(row=3, column=0, columnspan=2, sticky="ew", pady=(0, 6))
+            ttk.Checkbutton(action_body, text="Cycle recorded points (round-robin)", variable=self.round_robin_var, style="App.TCheckbutton").grid(row=3, column=2, columnspan=2, sticky="w", padx=(14, 0), pady=(0, 6))
 
             timing_card, timing_body = self._create_dropdown_section(
                 left_stack,
@@ -4712,7 +4200,7 @@ def MAINWINDOW_REDESIGNED():
                 "Timing and Repeat",
                 "Delay, countdown, runtime cap, and other rhythm controls live here.",
             )
-            timing_card.grid(row=1, column=0, sticky="ew", pady=(12, 0))
+            timing_card.grid(row=2, column=0, sticky="ew", pady=(12, 0))
             timing_body.columnconfigure(1, weight=1)
             timing_body.columnconfigure(3, weight=1)
 
@@ -4732,13 +4220,32 @@ def MAINWINDOW_REDESIGNED():
             for index, preset in enumerate(self.DELAY_PRESETS):
                 ttk.Button(preset_bar, text=preset, style="Chip.TButton", command=lambda value=preset: self._set_delay_preset(value)).grid(row=0, column=index, padx=(0 if index == 0 else 4, 0))
 
+            tk.Label(timing_body, text="Target actions/sec", bg="#f8fafc", fg="#0f172a", font=("Segoe UI", 10, "bold")).grid(row=3, column=0, sticky="w", pady=(0, 6))
+            ttk.Entry(timing_body, textvariable=self.target_cps_var).grid(row=3, column=1, sticky="ew", pady=(0, 6))
+            cps_row = tk.Frame(timing_body, bg="#f8fafc")
+            cps_row.grid(row=3, column=2, columnspan=2, sticky="w", padx=(14, 0), pady=(0, 6))
+            ttk.Button(cps_row, text="Apply Rate", style="Secondary.TButton", command=self._apply_target_cps).grid(row=0, column=0)
+            ttk.Button(cps_row, text="Read From Delay", style="Secondary.TButton", command=self._sync_cps_from_delay).grid(row=0, column=1, padx=(6, 0))
+            cps_preset_bar = tk.Frame(timing_body, bg="#f8fafc")
+            cps_preset_bar.grid(row=4, column=1, columnspan=3, sticky="w", pady=(0, 6))
+            for index, preset in enumerate(self.CPS_PRESETS):
+                ttk.Button(
+                    cps_preset_bar, text=f"{preset}/s", style="Chip.TButton",
+                    command=lambda value=preset: (self.target_cps_var.set(value), self._apply_target_cps()),
+                ).grid(row=0, column=index, padx=(0 if index == 0 else 4, 0))
+
+            tk.Label(timing_body, text="Pacing mode", bg="#f8fafc", fg="#0f172a", font=("Segoe UI", 10, "bold")).grid(row=5, column=0, sticky="w", pady=(0, 6))
+            ttk.Combobox(timing_body, textvariable=self.pacing_mode_var, values=("Precise", "Legacy V10.1"), state="readonly").grid(row=5, column=1, sticky="ew", pady=(0, 6))
+            tk.Label(timing_body, text="Start at (HH:MM)", bg="#f8fafc", fg="#0f172a", font=("Segoe UI", 10, "bold")).grid(row=5, column=2, sticky="w", padx=(14, 0), pady=(0, 6))
+            ttk.Entry(timing_body, textvariable=self.scheduled_start_var).grid(row=5, column=3, sticky="ew", pady=(0, 6))
+
             safety_card, safety_body = self._create_dropdown_section(
                 left_stack,
                 "safety_guard",
                 "Safety Guard",
                 "Action caps, corner fail-safe behaviour, and plan validation.",
             )
-            safety_card.grid(row=2, column=0, sticky="ew", pady=(12, 0))
+            safety_card.grid(row=3, column=0, sticky="ew", pady=(12, 0))
             safety_body.columnconfigure(1, weight=1)
             safety_body.columnconfigure(3, weight=1)
 
@@ -4761,12 +4268,12 @@ def MAINWINDOW_REDESIGNED():
                 "Innovation Lab",
                 "Preset behaviours, jitter shaping, and fatigue-friendly pacing options.",
             )
-            innovation_card.grid(row=3, column=0, sticky="ew", pady=(12, 0))
+            innovation_card.grid(row=4, column=0, sticky="ew", pady=(12, 0))
             innovation_body.columnconfigure(1, weight=1)
             innovation_body.columnconfigure(3, weight=1)
 
             tk.Label(innovation_body, text="Behaviour preset", bg="#f8fafc", fg="#0f172a", font=("Segoe UI", 10, "bold")).grid(row=0, column=0, sticky="w", pady=(0, 6))
-            self.innovation_preset_combo = ttk.Combobox(innovation_body, textvariable=self.behaviour_preset_var, values=("Balanced", "Precision", "Burst Sprint", "Human Mimic"), state="readonly")
+            self.innovation_preset_combo = ttk.Combobox(innovation_body, textvariable=self.behaviour_preset_var, values=tuple(sorted(PROFILE_ENUM_FIELDS["behaviour_preset"])), state="readonly")
             self.innovation_preset_combo.grid(row=0, column=1, sticky="ew", pady=(0, 6))
             ttk.Button(innovation_body, text="Apply", style="Secondary.TButton", command=self._apply_behaviour_preset).grid(row=0, column=2, sticky="ew", padx=(14, 0), pady=(0, 6))
             ttk.Button(innovation_body, text="Open Window Studio", style="Secondary.TButton", command=lambda: self._set_dropdown_state("window_studio", True)).grid(row=0, column=3, sticky="ew", pady=(0, 6))
@@ -4790,13 +4297,35 @@ def MAINWINDOW_REDESIGNED():
             ttk.Checkbutton(innovation_flags, text="Minimize while clicking", variable=self.minimize_on_start_var, style="App.TCheckbutton").grid(row=0, column=2, sticky="w", padx=(18, 0))
             ttk.Checkbutton(innovation_flags, text="Restore after run", variable=self.restore_after_run_var, style="App.TCheckbutton").grid(row=0, column=3, sticky="w", padx=(18, 0))
 
+            hotkey_card, hotkey_body = self._create_dropdown_section(
+                left_stack,
+                "hotkey_center",
+                "Hotkey Center",
+                "System-wide hotkeys so the app is drivable while it is minimised over the target.",
+            )
+            hotkey_card.grid(row=5, column=0, sticky="ew", pady=(12, 0))
+            hotkey_body.columnconfigure(1, weight=1)
+            hotkey_body.columnconfigure(3, weight=1)
+
+            tk.Label(hotkey_body, text="Start hotkey", bg="#f8fafc", fg="#0f172a", font=("Segoe UI", 10, "bold")).grid(row=0, column=0, sticky="w", pady=(0, 6))
+            ttk.Entry(hotkey_body, textvariable=self.start_hotkey_var).grid(row=0, column=1, sticky="ew", pady=(0, 6))
+            tk.Label(hotkey_body, text="Pause hotkey", bg="#f8fafc", fg="#0f172a", font=("Segoe UI", 10, "bold")).grid(row=0, column=2, sticky="w", padx=(14, 0), pady=(0, 6))
+            ttk.Entry(hotkey_body, textvariable=self.pause_hotkey_var).grid(row=0, column=3, sticky="ew", pady=(0, 6))
+
+            tk.Label(hotkey_body, text="Capture hotkey", bg="#f8fafc", fg="#0f172a", font=("Segoe UI", 10, "bold")).grid(row=1, column=0, sticky="w", pady=(0, 6))
+            ttk.Entry(hotkey_body, textvariable=self.capture_hotkey_var).grid(row=1, column=1, sticky="ew", pady=(0, 6))
+            ttk.Checkbutton(hotkey_body, text="Enable global hotkeys", variable=self.global_hotkeys_var, command=self._toggle_global_hotkeys, style="App.TCheckbutton").grid(row=1, column=2, columnspan=2, sticky="w", padx=(14, 0), pady=(0, 6))
+            ttk.Button(hotkey_body, text="Re-register Hotkeys", style="Secondary.TButton", command=self._register_global_hotkeys).grid(row=2, column=0, columnspan=2, sticky="ew", pady=(0, 6))
+            tk.Label(hotkey_body, text="In-window: F5 start, F6 pause, Esc stop.", bg="#f8fafc", fg="#475569", font=("Segoe UI", 9)).grid(row=2, column=2, columnspan=2, sticky="w", padx=(14, 0), pady=(0, 6))
+            tk.Label(hotkey_body, textvariable=self.hotkey_status_var, bg="#f8fafc", fg="#0f766e", font=("Segoe UI", 9, "bold"), wraplength=620, justify=LEFT).grid(row=3, column=0, columnspan=4, sticky="w")
+
             tools_card, tools_body = self._create_dropdown_section(
                 left_stack,
                 "tools",
                 "Tools and Helpers",
                 "Open specialist windows only when you need them instead of keeping everything on screen.",
             )
-            tools_card.grid(row=4, column=0, sticky="ew", pady=(12, 0))
+            tools_card.grid(row=6, column=0, sticky="ew", pady=(12, 0))
             tools_body.columnconfigure(0, weight=1)
             tools_body.columnconfigure(1, weight=1)
 
@@ -4821,7 +4350,7 @@ def MAINWINDOW_REDESIGNED():
                 "Profiles and Recall",
                 "Save and reload working setups without keeping the controls visible all the time.",
             )
-            profiles_card.grid(row=5, column=0, sticky="ew", pady=(12, 0))
+            profiles_card.grid(row=7, column=0, sticky="ew", pady=(12, 0))
             profiles_body.columnconfigure(0, weight=1)
             profiles_body.columnconfigure(1, weight=1)
 
@@ -4842,7 +4371,7 @@ def MAINWINDOW_REDESIGNED():
                 "Window Studio",
                 "Desktop-focused options, visual tuning, and layout presets stay concealed until needed.",
             )
-            window_card.grid(row=6, column=0, sticky="ew", pady=(12, 0))
+            window_card.grid(row=8, column=0, sticky="ew", pady=(12, 0))
             window_body.columnconfigure(1, weight=1)
 
             tk.Label(window_body, text="Theme", bg="#f8fafc", fg="#0f172a", font=("Segoe UI", 10, "bold")).grid(row=0, column=0, sticky="w", pady=(0, 6))
@@ -4906,8 +4435,10 @@ def MAINWINDOW_REDESIGNED():
             self.session_elapsed_var = tk.StringVar(value="Session Elapsed: 00:00:00")
             tk.Label(summary_body, textvariable=self.total_session_clicks_var, bg="#f8fafc", fg="#0f766e", font=("Segoe UI", 9, "bold")).grid(row=14, column=0, sticky="w")
             tk.Label(summary_body, textvariable=self.session_elapsed_var, bg="#f8fafc", fg="#0f766e", font=("Segoe UI", 9, "bold")).grid(row=15, column=0, sticky="w", pady=(4, 0))
-            tk.Label(summary_body, text="Preset", bg="#f8fafc", fg="#0f172a", font=("Segoe UI", 10, "bold")).grid(row=16, column=0, sticky="w", pady=(12, 0))
-            tk.Label(summary_body, textvariable=self.preset_summary_var, bg="#f8fafc", fg="#334155", font=("Segoe UI", 10), wraplength=360, justify=LEFT).grid(row=17, column=0, sticky="w", pady=(4, 0))
+            tk.Label(summary_body, textvariable=self.live_rate_var, bg="#f8fafc", fg="#0f766e", font=("Segoe UI", 9, "bold"), wraplength=360, justify=LEFT).grid(row=16, column=0, sticky="w", pady=(4, 0))
+            tk.Label(summary_body, textvariable=self.lifetime_stats_var, bg="#f8fafc", fg="#475569", font=("Segoe UI", 9), wraplength=360, justify=LEFT).grid(row=17, column=0, sticky="w", pady=(4, 0))
+            tk.Label(summary_body, text="Preset", bg="#f8fafc", fg="#0f172a", font=("Segoe UI", 10, "bold")).grid(row=18, column=0, sticky="w", pady=(12, 0))
+            tk.Label(summary_body, textvariable=self.preset_summary_var, bg="#f8fafc", fg="#334155", font=("Segoe UI", 10), wraplength=360, justify=LEFT).grid(row=19, column=0, sticky="w", pady=(4, 0))
 
             support_card, support_body = self._create_card(
                 right_stack,
@@ -4968,6 +4499,14 @@ def MAINWINDOW_REDESIGNED():
                 self.theme_var,
                 self.profile_name_var,
                 self.profile_choice_var,
+                self.action_key_var,
+                self.action_text_var,
+                self.scroll_amount_var,
+                self.hold_duration_var,
+                self.drag_to_x_var,
+                self.drag_to_y_var,
+                self.pacing_mode_var,
+                self.scheduled_start_var,
             ):
                 variable.trace_add("write", self._handle_state_change)
             for variable in (
@@ -4986,8 +4525,11 @@ def MAINWINDOW_REDESIGNED():
                 self.play_sound_var,
                 self.dry_run_var,
                 self.pyautogui_failsafe_var,
+                self.round_robin_var,
             ):
                 variable.trace_add("write", self._handle_state_change)
+
+            self._refresh_action_params()
 
             self.repeat_mode_combo.bind("<<ComboboxSelected>>", lambda _event: self._update_repeat_state())
             self.profile_combo.bind("<<ComboboxSelected>>", self._sync_profile_name_from_choice)
@@ -5004,8 +4546,9 @@ def MAINWINDOW_REDESIGNED():
             menu = Menu(self)
 
             tools_menu = Menu(menu, tearoff=0)
-            tools_menu.add_command(label='Start', command=self.startclick)
-            tools_menu.add_command(label='Stop', command=self.stopclick)
+            tools_menu.add_command(label='Start', command=self.startclick, accelerator='F5')
+            tools_menu.add_command(label='Pause / Resume', command=self.toggle_pause, accelerator='F6')
+            tools_menu.add_command(label='Stop', command=self.stopclick, accelerator='Esc')
             tools_menu.add_separator()
             tools_menu.add_command(label='Find Coordinates', command=self._open_finder)
             tools_menu.add_command(label='Coordinate Sequence', command=self._open_sequence_builder)
@@ -5015,6 +4558,7 @@ def MAINWINDOW_REDESIGNED():
             tools_menu.add_command(label='Auto Clicker Mega Spam', command=self._open_mega_spam)
             tools_menu.add_command(label='Recording Studio', command=self._open_recording_studio)
             tools_menu.add_command(label='Health Check', command=self._open_health_dashboard)
+            tools_menu.add_command(label='Run History', command=self._open_run_history)
             tools_menu.add_command(label='Export Session Report', command=self._export_session_report)
             tools_menu.add_command(label='Create Support Bundle', command=self._create_support_bundle)
             tools_menu.add_command(label='Backup State Snapshot', command=self._backup_state_snapshot)
@@ -5039,8 +4583,9 @@ def MAINWINDOW_REDESIGNED():
         def _build_context_menu(self):
             self.popup = Menu(self, tearoff=0)
             self.popup.add_command(label='Capture Current Cursor', command=self._capture_cursor_position)
-            self.popup.add_command(label='Start', command=self.startclick)
-            self.popup.add_command(label='Stop', command=self.stopclick)
+            self.popup.add_command(label='Start', command=self.startclick, accelerator='F5')
+            self.popup.add_command(label='Pause / Resume', command=self.toggle_pause, accelerator='F6')
+            self.popup.add_command(label='Stop', command=self.stopclick, accelerator='Esc')
             self.popup.add_separator()
             self.popup.add_command(label='Coordinate Sequence', command=self._open_sequence_builder)
             self.popup.add_command(label='Advanced Colour Clicker', command=Colour_Clicker)
@@ -5049,6 +4594,7 @@ def MAINWINDOW_REDESIGNED():
             self.popup.add_command(label='Photo Clicker', command=Photo_Clicker)
             self.popup.add_command(label='Recording Studio', command=self._open_recording_studio)
             self.popup.add_command(label='Health Check', command=self._open_health_dashboard)
+            self.popup.add_command(label='Run History', command=self._open_run_history)
             self.popup.add_command(label='Export Session Report', command=self._export_session_report)
             self.popup.add_command(label='Create Support Bundle', command=self._create_support_bundle)
             self.popup.add_command(label='Backup State Snapshot', command=self._backup_state_snapshot)
@@ -5292,6 +4838,15 @@ def MAINWINDOW_REDESIGNED():
                 "dry_run": self.dry_run_var.get(),
                 "pyautogui_failsafe": self.pyautogui_failsafe_var.get(),
                 "theme": self.theme_var.get(),
+                "action_key": self.action_key_var.get(),
+                "action_text": self.action_text_var.get(),
+                "scroll_amount": self.scroll_amount_var.get(),
+                "hold_duration": self.hold_duration_var.get(),
+                "drag_to_x": self.drag_to_x_var.get(),
+                "drag_to_y": self.drag_to_y_var.get(),
+                "pacing_mode": self.pacing_mode_var.get(),
+                "scheduled_start": self.scheduled_start_var.get(),
+                "target_cps": self.target_cps_var.get(),
             }
 
         def _apply_profile_data(self, profile_data):
@@ -5324,7 +4879,17 @@ def MAINWINDOW_REDESIGNED():
             self.dry_run_var.set(bool(profile_data.get("dry_run", self.dry_run_var.get())))
             self.pyautogui_failsafe_var.set(bool(profile_data.get("pyautogui_failsafe", self.pyautogui_failsafe_var.get())))
             self.theme_var.set(profile_data.get("theme", self.theme_var.get()))
+            self.action_key_var.set(str(profile_data.get("action_key", self.action_key_var.get())))
+            self.action_text_var.set(str(profile_data.get("action_text", self.action_text_var.get())))
+            self.scroll_amount_var.set(str(profile_data.get("scroll_amount", self.scroll_amount_var.get())))
+            self.hold_duration_var.set(str(profile_data.get("hold_duration", self.hold_duration_var.get())))
+            self.drag_to_x_var.set(str(profile_data.get("drag_to_x", self.drag_to_x_var.get())))
+            self.drag_to_y_var.set(str(profile_data.get("drag_to_y", self.drag_to_y_var.get())))
+            self.pacing_mode_var.set(profile_data.get("pacing_mode", self.pacing_mode_var.get()))
+            self.scheduled_start_var.set(str(profile_data.get("scheduled_start", self.scheduled_start_var.get())))
+            self.target_cps_var.set(str(profile_data.get("target_cps", self.target_cps_var.get())))
             self._refresh_preset_summary()
+            self._refresh_action_params()
             self._apply_theme()
             self._apply_window_preferences()
             self._update_repeat_state()
@@ -5370,13 +4935,20 @@ def MAINWINDOW_REDESIGNED():
                     geometry = ""
 
             return {
+                "schema_version": STATE_SCHEMA_VERSION,
+                "app_version": APP_VERSION,
                 "profile_data": self._collect_profile_data(),
                 "profile_name": self.profile_name_var.get(),
                 "profile_choice": self.profile_choice_var.get(),
                 "geometry": geometry,
                 "recording_data": self.recording_data[-200:],
-                "activity_history": self.activity_history[-40:],
-                "run_reports": self.run_reports[-20:],
+                "activity_history": self.activity_history[-80:],
+                "run_reports": self.run_reports[-40:],
+                "round_robin": bool(self.round_robin_var.get()),
+                "global_hotkeys": bool(self.global_hotkeys_var.get()),
+                "start_hotkey": self.start_hotkey_var.get(),
+                "pause_hotkey": self.pause_hotkey_var.get(),
+                "capture_hotkey": self.capture_hotkey_var.get(),
             }
 
         def _write_workspace_to_disk(self):
@@ -5411,10 +4983,17 @@ def MAINWINDOW_REDESIGNED():
             except Exception as exc:
                 self.status_var.set(f"Workspace file could not be loaded: {exc}")
                 return
+            if not isinstance(workspace_state, dict):
+                self.status_var.set("Workspace file is not a JSON object; keeping defaults.")
+                return
 
             profile_data = workspace_state.get("profile_data")
             if isinstance(profile_data, dict):
-                self._apply_profile_data(profile_data)
+                # A malformed persisted profile must not take the whole app down at startup.
+                try:
+                    self._apply_profile_data(profile_data)
+                except Exception as exc:
+                    self.status_var.set(f"Saved setup could not be restored ({exc}); defaults kept.")
 
             self.profile_name_var.set(str(workspace_state.get("profile_name", self.profile_name_var.get())))
             self.profile_choice_var.set(str(workspace_state.get("profile_choice", self.profile_choice_var.get())))
@@ -5433,11 +5012,19 @@ def MAINWINDOW_REDESIGNED():
             if isinstance(run_reports, list):
                 self.run_reports = [report for report in run_reports[-20:] if isinstance(report, dict)]
 
+            self.round_robin_var.set(bool(workspace_state.get("round_robin", False)))
+            self.start_hotkey_var.set(str(workspace_state.get("start_hotkey", self.start_hotkey_var.get())))
+            self.pause_hotkey_var.set(str(workspace_state.get("pause_hotkey", self.pause_hotkey_var.get())))
+            self.capture_hotkey_var.set(str(workspace_state.get("capture_hotkey", self.capture_hotkey_var.get())))
+            if bool(workspace_state.get("global_hotkeys", False)):
+                self.global_hotkeys_var.set(True)
+                self._register_global_hotkeys()
+
             geometry = workspace_state.get("geometry")
             if geometry and self.remember_window_geometry_var.get():
                 try:
-                    self.geometry(str(geometry))
-                except:
+                    self.geometry(_clamp_geometry_to_screen(str(geometry), self.screen_width, self.screen_height))
+                except Exception:
                     pass
 
         def _handle_state_change(self, *_args):
@@ -5542,8 +5129,7 @@ def MAINWINDOW_REDESIGNED():
                 return
 
             try:
-                with open(export_path, "w", encoding="utf-8") as export_handle:
-                    json.dump(self.saved_profiles, export_handle, indent=2, sort_keys=True)
+                _atomic_write_json(export_path, self.saved_profiles, sort_keys=True)
             except Exception as exc:
                 messagebox.showerror("Export failed", f"Unable to export profiles.\n{exc}", parent=self)
                 return
@@ -5570,7 +5156,7 @@ def MAINWINDOW_REDESIGNED():
                 return
 
             try:
-                preview = _preview_profile_import(imported_profiles, self.saved_profiles, self.CLICK_TYPES)
+                preview = _preview_profile_import(imported_profiles, self.saved_profiles, self.ACTION_TYPES)
             except Exception as exc:
                 messagebox.showerror("Import failed", str(exc), parent=self)
                 return
@@ -5843,180 +5429,6 @@ def MAINWINDOW_REDESIGNED():
 
             refresh_report()
 
-        def _open_recording_studio(self):
-            window = tk.Toplevel(self)
-            window.title("Recording Studio")
-            window.geometry("620x520+320+190")
-            window.resizable(False, False)
-            window.attributes("-topmost", True)
-            window.configure(bg="#edf4ff")
-            try:
-                window.iconbitmap(_resource_path("favicon.ico"))
-            except:
-                pass
-
-            body = tk.Frame(window, bg="#edf4ff", padx=16, pady=16)
-            body.pack(fill="both", expand=True)
-            body.columnconfigure(0, weight=1)
-            body.columnconfigure(1, weight=1)
-
-            summary_var = tk.StringVar(value="")
-            helper_var = tk.StringVar(value="Manage recorded points, then use Playback or import them into a sequence.")
-            state = {"snapshot": None, "recording_flag": None}
-
-            tk.Label(body, text="Recording Studio", bg="#edf4ff", fg="#0f172a", font=("Segoe UI", 12, "bold")).grid(row=0, column=0, columnspan=2, sticky="w")
-            tk.Label(body, text="Capture, review, save, load, and trim recorded points without leaving the main app.", bg="#edf4ff", fg="#475569", font=("Segoe UI", 9)).grid(row=1, column=0, columnspan=2, sticky="w", pady=(2, 12))
-
-            list_box = Listbox(body, width=62, height=16, font=("Segoe UI", 10), bg="white", fg="#0f172a", selectbackground="#1d4ed8", activestyle="none", exportselection=False)
-            list_box.grid(row=2, column=0, columnspan=2, sticky="ew")
-
-            tk.Label(body, textvariable=summary_var, bg="#edf4ff", fg="#0f766e", font=("Segoe UI", 9, "bold")).grid(row=3, column=0, columnspan=2, sticky="w", pady=(8, 12))
-
-            def selected_index():
-                selection = list_box.curselection()
-                return selection[0] if selection else None
-
-            def render_points(preferred_index=None):
-                snapshot = tuple(self.recording_data)
-                if snapshot == state["snapshot"] and self.is_recording == state["recording_flag"]:
-                    return
-
-                current_index = selected_index() if preferred_index is None else preferred_index
-                list_box.delete(0, END)
-                for index, (x_pos, y_pos) in enumerate(self.recording_data, start=1):
-                    list_box.insert(END, f"{index}. ({x_pos}, {y_pos})")
-
-                if current_index is not None and 0 <= current_index < len(self.recording_data):
-                    list_box.selection_set(current_index)
-                    list_box.activate(current_index)
-
-                summary_var.set(
-                    f"{len(self.recording_data)} point(s) captured | recording is {'active' if self.is_recording else 'idle'}"
-                )
-                state["snapshot"] = snapshot
-                state["recording_flag"] = self.is_recording
-
-            def schedule_refresh():
-                if not window.winfo_exists():
-                    return
-                render_points()
-                window.after(250, schedule_refresh)
-
-            def capture_cursor_point():
-                if not _ensure_dependencies("Recording Studio", ["pyautogui"], parent=window):
-                    return
-
-                try:
-                    x_pos, y_pos = pyautogui.position()
-                except Exception as exc:
-                    messagebox.showerror("Capture failed", f"Unable to read the cursor position.\n{exc}", parent=window)
-                    return
-
-                self.recording_data.append((int(x_pos), int(y_pos)))
-                render_points(len(self.recording_data) - 1)
-                helper_var.set(f"Captured point ({x_pos}, {y_pos}).")
-                self._append_activity(f"Captured recording point {x_pos}, {y_pos}.")
-                self._schedule_workspace_save()
-
-            def use_selected_for_target():
-                current_index = selected_index()
-                if current_index is None:
-                    return
-                x_pos, y_pos = self.recording_data[current_index]
-                self.target_x_var.set(str(x_pos))
-                self.target_y_var.set(str(y_pos))
-                helper_var.set(f"Loaded ({x_pos}, {y_pos}) into the main planner.")
-                self._append_activity(f"Loaded recording point {x_pos}, {y_pos} into the planner.")
-
-            def undo_last_point():
-                if not self.recording_data:
-                    return
-                removed_point = self.recording_data.pop()
-                render_points(len(self.recording_data) - 1 if self.recording_data else None)
-                helper_var.set(f"Removed last point {removed_point}.")
-                self._append_activity(f"Removed last recording point {removed_point}.")
-                self._schedule_workspace_save()
-
-            def delete_selected_point():
-                current_index = selected_index()
-                if current_index is None:
-                    return
-                removed_point = self.recording_data.pop(current_index)
-                render_points(min(current_index, len(self.recording_data) - 1) if self.recording_data else None)
-                helper_var.set(f"Removed point {removed_point}.")
-                self._append_activity(f"Removed recording point {removed_point}.")
-                self._schedule_workspace_save()
-
-            def clear_points():
-                if not self.recording_data:
-                    return
-                if not messagebox.askyesno("Clear recording", "Remove every recorded point?", parent=window):
-                    return
-                self.recording_data.clear()
-                render_points()
-                helper_var.set("Recording cleared.")
-                self._append_activity("Cleared all recorded points.")
-                self._schedule_workspace_save()
-
-            def save_recording():
-                if not self.recording_data:
-                    messagebox.showinfo("Recording Studio", "Capture at least one point before saving.", parent=window)
-                    return
-
-                file_path = filedialog.asksaveasfilename(
-                    defaultextension=".json",
-                    filetypes=[("JSON files", "*.json")],
-                    initialfile="autoclicker_recording.json",
-                    parent=window,
-                )
-                if not file_path:
-                    return
-
-                try:
-                    with open(file_path, "w", encoding="utf-8") as file_handle:
-                        json.dump(self.recording_data, file_handle, indent=2)
-                except Exception as exc:
-                    messagebox.showerror("Save failed", f"Unable to save the recording.\n{exc}", parent=window)
-                    return
-
-                helper_var.set(f"Saved {len(self.recording_data)} point(s) to {os.path.basename(file_path)}.")
-                self._append_activity(f"Saved recording to {os.path.basename(file_path)}.")
-
-            def load_recording():
-                file_path = filedialog.askopenfilename(
-                    filetypes=[("JSON files", "*.json")],
-                    parent=window,
-                )
-                if not file_path:
-                    return
-
-                try:
-                    loaded_points = _normalize_recording_points(_load_json_file(file_path), strict=True)
-                except Exception as exc:
-                    messagebox.showerror("Load failed", f"Unable to load the recording.\n{exc}", parent=window)
-                    return
-
-                self.recording_data = loaded_points
-                render_points(0 if self.recording_data else None)
-                helper_var.set(f"Loaded {len(self.recording_data)} point(s) from {os.path.basename(file_path)}.")
-                self._append_activity(f"Loaded recording from {os.path.basename(file_path)}.")
-                self._schedule_workspace_save()
-
-            ttk.Button(body, text="Toggle Record", style="Secondary.TButton", command=self._toggle_recording).grid(row=4, column=0, sticky="ew", pady=(0, 8))
-            ttk.Button(body, text="Capture Cursor", style="Secondary.TButton", command=capture_cursor_point).grid(row=4, column=1, sticky="ew", padx=(8, 0), pady=(0, 8))
-            ttk.Button(body, text="Use Selected In Planner", style="Secondary.TButton", command=use_selected_for_target).grid(row=5, column=0, sticky="ew", pady=(0, 8))
-            ttk.Button(body, text="Playback Recording", style="Secondary.TButton", command=self._play_recording).grid(row=5, column=1, sticky="ew", padx=(8, 0), pady=(0, 8))
-            ttk.Button(body, text="Undo Last", style="Secondary.TButton", command=undo_last_point).grid(row=6, column=0, sticky="ew", pady=(0, 8))
-            ttk.Button(body, text="Delete Selected", style="Secondary.TButton", command=delete_selected_point).grid(row=6, column=1, sticky="ew", padx=(8, 0), pady=(0, 8))
-            ttk.Button(body, text="Save Recording", style="Secondary.TButton", command=save_recording).grid(row=7, column=0, sticky="ew", pady=(0, 8))
-            ttk.Button(body, text="Load Recording", style="Secondary.TButton", command=load_recording).grid(row=7, column=1, sticky="ew", padx=(8, 0), pady=(0, 8))
-            ttk.Button(body, text="Clear All", style="Secondary.TButton", command=clear_points).grid(row=8, column=0, columnspan=2, sticky="ew", pady=(0, 8))
-
-            tk.Label(body, textvariable=helper_var, bg="#edf4ff", fg="#475569", font=("Segoe UI", 9), wraplength=580, justify=LEFT).grid(row=9, column=0, columnspan=2, sticky="w", pady=(8, 0))
-
-            render_points()
-            schedule_refresh()
-
         def _capture_cursor_position(self):
             try:
                 current_x, current_y = pyautogui.position()
@@ -6056,7 +5468,21 @@ def MAINWINDOW_REDESIGNED():
                     cap = f"{cap_number} action cap" if cap_number > 0 else "action cap needs attention"
                 except Exception:
                     cap = "action cap needs attention"
-            self.safety_status_var.set(f"Safety: {mode} | {fail_safe} | {cap}")
+
+            parts = [mode, fail_safe, cap, f"{self.pacing_mode_var.get()} pacing"]
+            action_name = self.click_mode_var.get()
+            if action_name != "Left Click":
+                parts.append(action_name)
+            if self.round_robin_var.get() and self.recording_data:
+                parts.append(f"round-robin over {len(self.recording_data)} point(s)")
+            schedule = _parse_scheduled_start(self.scheduled_start_var.get())
+            if schedule.get("error"):
+                parts.append("scheduled start invalid")
+            elif schedule.get("scheduled"):
+                parts.append(f"starts {self.scheduled_start_var.get().strip()}")
+            if self.global_hotkeys_var.get():
+                parts.append("global hotkeys on")
+            self.safety_status_var.set("Safety: " + " | ".join(parts))
 
         def _format_run_intelligence(self, config):
             planned_actions = config["repeat_limit"]
@@ -6066,9 +5492,15 @@ def MAINWINDOW_REDESIGNED():
                 else:
                     planned_actions = min(planned_actions, config["max_actions"])
 
-            estimated_duration = config["countdown"]
+            # Estimate against the real seconds-per-action, not the raw delay: Legacy
+            # pacing adds PyAutoGUI's own inter-call pause and used to double every estimate.
+            period = _effective_action_period(
+                config["delay"], config.get("pacing_mode", "Precise"), config.get("human_like")
+            )
+            schedule = config.get("schedule") or {}
+            estimated_duration = config["countdown"] + (schedule.get("delay_seconds", 0.0) or 0.0)
             if planned_actions is not None:
-                estimated_duration += max(0, planned_actions - 1) * config["delay"]
+                estimated_duration += max(0, planned_actions - 1) * period
                 if config["micro_pause_every"] > 0 and config["micro_pause_duration"] > 0:
                     pause_count = planned_actions // config["micro_pause_every"]
                     if planned_actions > 0 and planned_actions % config["micro_pause_every"] == 0:
@@ -6080,10 +5512,11 @@ def MAINWINDOW_REDESIGNED():
             else:
                 run_shape = "continuous until stopped"
 
-            if config["delay"] == 0:
+            measured_rate = _delay_to_cps(period)
+            if measured_rate is None:
                 pace = "maximum available pace"
             else:
-                pace = f"about {1 / config['delay']:.1f} action(s)/sec"
+                pace = f"about {measured_rate:.1f} action(s)/sec"
 
             warnings = []
             if not (0 <= config["x"] < self.screen_width and 0 <= config["y"] < self.screen_height):
@@ -6092,12 +5525,19 @@ def MAINWINDOW_REDESIGNED():
                 warnings.append(f"target clamps to {clamped_x}, {clamped_y}")
             if config["delay"] == 0:
                 warnings.append("zero delay")
+            if config.get("pacing_mode") == "Legacy V10.1" and config["delay"] > 0:
+                warnings.append(f"legacy pacing: real period {period:.3f}s, not {config['delay']:.3f}s")
             if config["dry_run"]:
                 warnings.append("dry run: no clicks will be sent")
             if config["repeat_limit"] is None and config["runtime_limit"] == 0 and config["max_actions"] == 0:
                 warnings.append("no runtime/action cap")
             if not config["pyautogui_failsafe"]:
                 warnings.append("corner fail-safe off")
+            hotkey_check = _validate_hotkey(config.get("stop_hotkey"))
+            if config.get("stop_hotkey") and not hotkey_check["valid"]:
+                warnings.append("stop hotkey cannot be monitored")
+            if schedule.get("scheduled"):
+                warnings.append(schedule.get("detail", "scheduled start armed"))
 
             warning_text = "; ".join(warnings) if warnings else "no immediate warnings"
             return f"{run_shape}; {pace}; {warning_text}."
@@ -6120,8 +5560,9 @@ def MAINWINDOW_REDESIGNED():
             except Exception as exc:
                 self.readiness_var.set(f"Readiness: fix configuration\n- Review Configuration: {exc}")
                 return
+            config["targets"] = self._active_target_list(config)
             readiness = _build_readiness_checklist(config, (self.screen_width, self.screen_height))
-            self.readiness_var.set(_format_readiness_text(readiness))
+            self.readiness_var.set(_format_readiness_text(readiness, limit=10))
 
         def _refresh_profile_state(self):
             if not hasattr(self, "profile_state_var"):
@@ -6202,29 +5643,48 @@ def MAINWINDOW_REDESIGNED():
         def _pump_ui_queue(self):
             try:
                 while True:
-                    action, payload = self.ui_queue.get_nowait()
-                    if action == "status":
-                        self.status_var.set(payload)
-                    elif action == "progress":
-                        count, elapsed, last_point = payload
-                        action_label = "simulated action(s)" if self.active_run_was_dry_run else "click action(s)"
-                        self.session_var.set(
-                            f"Active run: {count} {action_label} processed over {elapsed:.2f} second(s). "
-                            f"Last point: {last_point[0]}, {last_point[1]}."
-                        )
-                    elif action == "finished":
-                        total_actions, elapsed, last_click_point = payload
-                        self._finish_run(total_actions, elapsed, last_click_point)
-            except queue.Empty:
+                    try:
+                        action, payload = self.ui_queue.get_nowait()
+                    except queue.Empty:
+                        break
+                    try:
+                        if action == "status":
+                            self.status_var.set(payload)
+                        elif action == "progress":
+                            count, elapsed, last_point, rates = payload
+                            action_label = "simulated action(s)" if self.active_run_was_dry_run else "click action(s)"
+                            self.session_var.set(
+                                f"Active run: {count} {action_label} processed over {elapsed:.2f} second(s). "
+                                f"Last point: {last_point[0]}, {last_point[1]}."
+                            )
+                            self.live_rate_var.set(
+                                f"Rate: {rates['instant_cps']:.2f} now | {rates['average_cps']:.2f} avg | "
+                                f"{rates['peak_cps']:.2f} peak action(s)/sec"
+                            )
+                        elif action == "finished":
+                            self._finish_run(*payload)
+                        elif action == "refresh_buttons":
+                            self._refresh_run_buttons()
+                    except Exception as exc:
+                        # One malformed message must never kill the pump; without this the
+                        # whole UI silently stops updating for the rest of the session.
+                        try:
+                            self.status_var.set(f"UI update issue: {exc}")
+                        except Exception:
+                            pass
+            except Exception:
                 pass
 
-            if self.winfo_exists():
-                self.after(100, self._pump_ui_queue)
+            try:
+                if self.winfo_exists():
+                    self.after(100, self._pump_ui_queue)
+            except Exception:
+                pass
 
         def _build_run_config(self):
             click_mode = self.click_mode_var.get()
-            if click_mode not in self.CLICK_TYPES:
-                raise ValueError("Choose a valid click type.")
+            if click_mode not in ACTION_REGISTRY:
+                raise ValueError("Choose a valid action type.")
 
             x_pos = int(self.target_x_var.get())
             y_pos = int(self.target_y_var.get())
@@ -6255,6 +5715,10 @@ def MAINWINDOW_REDESIGNED():
                 raise ValueError("Micro-pause duration must be zero or greater.")
 
             stop_hotkey = self.stop_hotkey_var.get().strip()
+            if stop_hotkey:
+                hotkey_check = _validate_hotkey(stop_hotkey)
+                if not hotkey_check["valid"]:
+                    raise ValueError(hotkey_check["reason"])
             if self.repeat_mode_var.get() == "Infinite":
                 repeat_limit = None
                 if not stop_hotkey:
@@ -6264,7 +5728,12 @@ def MAINWINDOW_REDESIGNED():
                 if repeat_limit < 1:
                     raise ValueError("Burst count must be at least 1.")
 
-            return {
+            schedule = _parse_scheduled_start(self.scheduled_start_var.get())
+            if schedule.get("error"):
+                raise ValueError(schedule["error"])
+
+            action_spec = ACTION_REGISTRY[click_mode]
+            config = {
                 "x": x_pos,
                 "y": y_pos,
                 "delay": delay_seconds,
@@ -6276,9 +5745,19 @@ def MAINWINDOW_REDESIGNED():
                 "max_actions": max_actions,
                 "stop_hotkey": stop_hotkey,
                 "repeat_limit": repeat_limit,
-                "button": self.CLICK_TYPES[click_mode][0],
-                "clicks": self.CLICK_TYPES[click_mode][1],
+                "button": action_spec.get("button", "left"),
+                "clicks": action_spec.get("clicks", 1),
                 "click_mode": click_mode,
+                "action_kind": action_spec["kind"],
+                "action_key": self.action_key_var.get().strip(),
+                "action_text": self.action_text_var.get(),
+                "scroll_amount": int(self.scroll_amount_var.get()),
+                "hold_duration": float(self.hold_duration_var.get()),
+                "drag_to_x": int(self.drag_to_x_var.get()),
+                "drag_to_y": int(self.drag_to_y_var.get()),
+                "pacing_mode": self.pacing_mode_var.get(),
+                "scheduled_start": self.scheduled_start_var.get().strip(),
+                "schedule": schedule,
                 "behaviour_preset": self.behaviour_preset_var.get(),
                 "micro_pause_every": micro_pause_every,
                 "micro_pause_duration": micro_pause_duration,
@@ -6286,171 +5765,283 @@ def MAINWINDOW_REDESIGNED():
                 "dry_run": self.dry_run_var.get(),
                 "pyautogui_failsafe": self.pyautogui_failsafe_var.get(),
             }
+            # Surfaces bad action parameters (empty key name, zero scroll) before the mouse moves.
+            _resolve_action(click_mode, config)
+            return config
 
-        def _stop_requested(self, stop_hotkey):
-            if self.stop_event.is_set():
+        def _stop_requested(self, stop_hotkey, stop_event=None):
+            stop_event = stop_event if stop_event is not None else self.stop_event
+            if stop_event.is_set():
                 return True
-            if not stop_hotkey:
+            if not stop_hotkey or keyboard is None:
                 return False
 
             try:
-                if keyboard.is_pressed(stop_hotkey):
-                    self.stop_reason = "hotkey"
-                    self.stop_event.set()
-                    if not self.hotkey_notified:
-                        self.hotkey_notified = True
-                        self.ui_queue.put(("status", f"Stop hotkey '{stop_hotkey}' pressed. Finishing the current loop."))
-                    return True
-            except:
-                pass
+                pressed = keyboard.is_pressed(stop_hotkey)
+            except Exception as exc:
+                # A hotkey that cannot be polled is reported once instead of silently
+                # leaving the run with no working stop key.
+                if not self.hotkey_notified:
+                    self.hotkey_notified = True
+                    self.ui_queue.put(("status", f"Stop hotkey '{stop_hotkey}' cannot be monitored ({exc}). Use the Stop button."))
+                return False
 
+            if pressed:
+                self.stop_reason = "hotkey"
+                stop_event.set()
+                if not self.hotkey_notified:
+                    self.hotkey_notified = True
+                    self.ui_queue.put(("status", f"Stop hotkey '{stop_hotkey}' pressed. Finishing the current loop."))
+                return True
             return False
+
+        def _wait_while_paused(self, config, stop_event=None):
+            """Block until Resume or Stop. Returns True if the run should continue."""
+            if not self.pause_event.is_set():
+                return True
+            self.ui_queue.put(("status", "Paused. Press Resume to continue."))
+            while self.pause_event.is_set():
+                if self._stop_requested(config.get("stop_hotkey"), stop_event):
+                    return False
+                time.sleep(0.05)
+            self.ui_queue.put(("status", "Resumed."))
+            return True
+
+        def _emit_action(self, config, point, stop_event=None):
+            """Perform one configured action at `point`. No-op when the run is a dry run.
+
+            `stop_event` decides which subsystem's stop token a held key or button honours;
+            without it a hold inside a sequence would watch the click run's token instead.
+            """
+            if config["dry_run"]:
+                return
+            descriptor = _resolve_action(config["click_mode"], dict(config, x=point[0], y=point[1]))
+            kind, kwargs = descriptor["kind"], descriptor["kwargs"]
+
+            if kind == "click":
+                pyautogui.click(
+                    x=kwargs["x"], y=kwargs["y"], button=kwargs["button"], clicks=kwargs["clicks"],
+                    interval=random.uniform(0.01, 0.03) if kwargs["clicks"] > 1 else 0.0,
+                )
+            elif kind == "move":
+                pyautogui.moveTo(kwargs["x"], kwargs["y"])
+            elif kind == "key":
+                pyautogui.press(kwargs["keys"])
+            elif kind == "key_hold":
+                pyautogui.keyDown(kwargs["key"])
+                try:
+                    _interruptible_sleep(kwargs["hold_duration"],
+                                         lambda: self._stop_requested(config.get("stop_hotkey"), stop_event))
+                finally:
+                    pyautogui.keyUp(kwargs["key"])
+            elif kind == "text":
+                pyautogui.write(kwargs["message"])
+            elif kind == "scroll":
+                pyautogui.scroll(kwargs["clicks"], x=kwargs["x"], y=kwargs["y"])
+            elif kind == "hold":
+                pyautogui.mouseDown(x=kwargs["x"], y=kwargs["y"], button=kwargs["button"])
+                try:
+                    _interruptible_sleep(kwargs["hold_duration"],
+                                         lambda: self._stop_requested(config.get("stop_hotkey"), stop_event))
+                finally:
+                    pyautogui.mouseUp(button=kwargs["button"])
+            elif kind == "drag":
+                pyautogui.mouseDown(x=kwargs["x"], y=kwargs["y"], button=kwargs["button"])
+                try:
+                    pyautogui.moveTo(
+                        max(0, min(self.screen_width - 1, kwargs["to_x"])),
+                        max(0, min(self.screen_height - 1, kwargs["to_y"])),
+                        duration=max(0.05, kwargs["hold_duration"]),
+                    )
+                finally:
+                    pyautogui.mouseUp(button=kwargs["button"])
 
         def _click_worker(self, config):
             previous_failsafe = getattr(pyautogui, "FAILSAFE", True)
+            previous_pause = getattr(pyautogui, "PAUSE", 0.1)
+            generation = config.get("generation", 0)
             total_actions = 0
-            started_at = time.perf_counter()
-            last_progress_update = started_at
             last_click_point = (config["x"], config["y"])
+            targets = config.get("targets") or [(config["x"], config["y"])]
+            stop_event = self.stop_event
+            started_at = time.perf_counter()
 
-            if config["countdown"] > 0:
-                remaining = config["countdown"]
-                last_announced = None
-                while remaining > 0:
-                    if self._stop_requested(config["stop_hotkey"]):
-                        elapsed = time.perf_counter() - started_at
-                        self.ui_queue.put(("finished", (total_actions, elapsed, last_click_point)))
-                        return
-                    announce_value = int(remaining)
-                    if remaining > announce_value:
-                        announce_value += 1
-                    if announce_value != last_announced:
-                        self.ui_queue.put(("status", f"Starting in {announce_value}s. Use Stop or {config['stop_hotkey'] or 'manual stop'} to cancel."))
-                        last_announced = announce_value
-                    sleep_slice = min(0.1, remaining)
-                    time.sleep(sleep_slice)
-                    remaining -= sleep_slice
+            def should_stop():
+                return self._stop_requested(config["stop_hotkey"], stop_event)
+
+            def finish(elapsed):
+                self.ui_queue.put(("finished", (total_actions, elapsed, last_click_point, generation)))
 
             try:
-                pyautogui.FAILSAFE = bool(config["pyautogui_failsafe"])
-            except Exception:
-                pass
+                schedule = config.get("schedule") or {}
+                if schedule.get("scheduled") and schedule.get("delay_seconds", 0) > 0:
+                    self.ui_queue.put(("status", f"Scheduled start armed. {schedule.get('detail', '')}"))
+                    if not _interruptible_sleep(schedule["delay_seconds"], should_stop, slice_seconds=0.2):
+                        finish(time.perf_counter() - started_at)
+                        return
 
-            while not self._stop_requested(config["stop_hotkey"]):
-                elapsed_before_click = time.perf_counter() - started_at
-                if config["runtime_limit"] > 0 and elapsed_before_click >= config["runtime_limit"]:
-                    self.stop_reason = "runtime_limit"
-                    break
+                if config["countdown"] > 0:
+                    countdown_deadline = time.perf_counter() + config["countdown"]
+                    last_announced = None
+                    while True:
+                        remaining = countdown_deadline - time.perf_counter()
+                        if remaining <= 0:
+                            break
+                        if should_stop():
+                            finish(time.perf_counter() - started_at)
+                            return
+                        announce_value = int(remaining) + (1 if remaining > int(remaining) else 0)
+                        if announce_value != last_announced:
+                            self.ui_queue.put(("status", f"Starting in {announce_value}s. Use Stop or {config['stop_hotkey'] or 'manual stop'} to cancel."))
+                            last_announced = announce_value
+                        _interruptible_sleep(min(0.1, remaining), should_stop, slice_seconds=0.05)
 
-                click_x = config["x"]
-                click_y = config["y"]
+                # The countdown is setup time, not run time: charging it against the runtime
+                # cap used to produce silent zero-action runs.
+                started_at = time.perf_counter()
+                last_progress_update = started_at
+                self.rate_samples = [(0.0, 0)]
 
                 try:
-                    if config["human_like"]:
-                        if config["jitter_x"] > 0:
-                            click_x += int(random.gauss(0, config["jitter_x"] / 2))
-                        if config["jitter_y"] > 0:
-                            click_y += int(random.gauss(0, config["jitter_y"] / 2))
-                        if not config["dry_run"]:
-                            pyautogui.moveTo(
-                                click_x + random.randint(-2, 2),
-                                click_y + random.randint(-2, 2),
-                                duration=random.uniform(0.01, 0.05),
-                            )
-                    else:
-                        if config["jitter_x"] > 0:
-                            click_x += random.randint(-config["jitter_x"], config["jitter_x"])
-                        if config["jitter_y"] > 0:
-                            click_y += random.randint(-config["jitter_y"], config["jitter_y"])
+                    pyautogui.FAILSAFE = bool(config["pyautogui_failsafe"])
+                    if config.get("pacing_mode", "Precise") == "Precise":
+                        # PyAutoGUI's default 0.1s inter-call pause otherwise makes the
+                        # configured delay a lie by a factor of 2-3.
+                        pyautogui.PAUSE = 0
+                except Exception:
+                    pass
 
-                    click_x = max(0, min(self.screen_width - 1, click_x))
-                    click_y = max(0, min(self.screen_height - 1, click_y))
-                    last_click_point = (click_x, click_y)
+                target_index = 0
+                while not should_stop():
+                    if not self._wait_while_paused(config, stop_event):
+                        break
 
+                    elapsed_before_action = time.perf_counter() - started_at
+                    if config["runtime_limit"] > 0 and elapsed_before_action >= config["runtime_limit"]:
+                        self.stop_reason = "runtime_limit"
+                        break
+
+                    base_x, base_y = targets[target_index % len(targets)]
+                    target_index += 1
+                    click_x, click_y = base_x, base_y
+
+                    try:
+                        if config["human_like"]:
+                            if config["jitter_x"] > 0:
+                                click_x += int(random.gauss(0, config["jitter_x"] / 2))
+                            if config["jitter_y"] > 0:
+                                click_y += int(random.gauss(0, config["jitter_y"] / 2))
+                            if not config["dry_run"] and _action_moves_pointer(config["click_mode"]):
+                                pyautogui.moveTo(
+                                    max(0, min(self.screen_width - 1, click_x + random.randint(-2, 2))),
+                                    max(0, min(self.screen_height - 1, click_y + random.randint(-2, 2))),
+                                    duration=random.uniform(0.01, 0.05),
+                                )
+                        else:
+                            if config["jitter_x"] > 0:
+                                click_x += random.randint(-config["jitter_x"], config["jitter_x"])
+                            if config["jitter_y"] > 0:
+                                click_y += random.randint(-config["jitter_y"], config["jitter_y"])
+
+                        click_x = max(0, min(self.screen_width - 1, click_x))
+                        click_y = max(0, min(self.screen_height - 1, click_y))
+                        last_click_point = (click_x, click_y)
+                        self._emit_action(config, (click_x, click_y), stop_event)
+                    except Exception as exc:
+                        if exc.__class__.__name__ == "FailSafeException":
+                            self.stop_reason = "failsafe"
+                            self.ui_queue.put(("status", "PyAutoGUI corner fail-safe triggered. Run stopped."))
+                        else:
+                            self.stop_reason = "error"
+                            self.ui_queue.put(("status", f"Action error: {exc}"))
+                        break
+
+                    total_actions += 1
                     if not config["dry_run"]:
-                        pyautogui.click(
-                            x=click_x,
-                            y=click_y,
-                            button=config["button"],
-                            clicks=config["clicks"],
-                            interval=random.uniform(0.01, 0.03) if config["clicks"] > 1 else 0.0,
+                        self.session_clicks += 1
+
+                    now = time.perf_counter()
+                    self.rate_samples.append((now - started_at, total_actions))
+                    if len(self.rate_samples) > 400:
+                        del self.rate_samples[:-200]
+                    if total_actions == 1 or now - last_progress_update >= 0.25:
+                        self.ui_queue.put((
+                            "progress",
+                            (total_actions, now - started_at, last_click_point, _rate_stats(self.rate_samples)),
+                        ))
+                        last_progress_update = now
+
+                    if (
+                        config["max_actions"] > 0
+                        and total_actions >= config["max_actions"]
+                        and (config["repeat_limit"] is None or config["max_actions"] < config["repeat_limit"])
+                    ):
+                        self.stop_reason = "max_actions"
+                        break
+
+                    if config["repeat_limit"] is not None and total_actions >= config["repeat_limit"]:
+                        self.stop_reason = "completed"
+                        break
+
+                    def runtime_exhausted():
+                        return (
+                            config["runtime_limit"] > 0
+                            and time.perf_counter() - started_at >= config["runtime_limit"]
                         )
-                except Exception as exc:
-                    if exc.__class__.__name__ == "FailSafeException":
-                        self.stop_reason = "failsafe"
-                        self.ui_queue.put(("status", "PyAutoGUI corner fail-safe triggered. Run stopped."))
+
+                    def wait_gate():
+                        if runtime_exhausted():
+                            self.stop_reason = "runtime_limit"
+                            return True
+                        return should_stop()
+
+                    if (
+                        config["micro_pause_every"] > 0
+                        and config["micro_pause_duration"] > 0
+                        and total_actions % config["micro_pause_every"] == 0
+                    ):
+                        self.ui_queue.put(
+                            ("status", f"Micro-pause: resting for {config['micro_pause_duration']:.2f}s after {total_actions} action(s).")
+                        )
+                        _interruptible_sleep(config["micro_pause_duration"], wait_gate)
+                        if self.stop_reason == "runtime_limit":
+                            break
+
+                    actual_delay = config["delay"]
+                    if config["delay_variance"] > 0:
+                        actual_delay = max(0.0, config["delay"] + random.uniform(-config["delay_variance"], config["delay_variance"]))
+
+                    if actual_delay > 0:
+                        _interruptible_sleep(actual_delay, wait_gate)
+                        if self.stop_reason == "runtime_limit":
+                            break
                     else:
-                        self.stop_reason = "error"
-                        self.ui_queue.put(("status", f"Click error: {exc}"))
-                    break
-                total_actions += 1
-                if not config["dry_run"]:
-                    self.session_clicks += 1
+                        # Zero delay in dry-run emits no throttling call at all; without this
+                        # yield the loop pegs a core and starves the stop-hotkey poll.
+                        time.sleep(0)
+                        if config["dry_run"] and total_actions % 256 == 0:
+                            time.sleep(0.001)
+            except Exception as exc:
+                self.stop_reason = "error"
+                self.ui_queue.put(("status", f"Run stopped by an internal error: {exc}"))
+            finally:
+                # Always restore the globals; leaking FAILSAFE=False used to disarm the
+                # corner escape for every later tool window in the process.
+                try:
+                    pyautogui.FAILSAFE = previous_failsafe
+                    pyautogui.PAUSE = previous_pause
+                except Exception:
+                    pass
+                finish(time.perf_counter() - started_at)
 
-                now = time.perf_counter()
-                if total_actions == 1 or now - last_progress_update >= 0.25:
-                    self.ui_queue.put(("progress", (total_actions, now - started_at, last_click_point)))
-                    last_progress_update = now
-
-                if (
-                    config["max_actions"] > 0
-                    and total_actions >= config["max_actions"]
-                    and (config["repeat_limit"] is None or config["max_actions"] < config["repeat_limit"])
-                ):
-                    self.stop_reason = "max_actions"
-                    break
-
-                if config["repeat_limit"] is not None and total_actions >= config["repeat_limit"]:
-                    self.stop_reason = "completed"
-                    break
-
-                if (
-                    config["micro_pause_every"] > 0
-                    and config["micro_pause_duration"] > 0
-                    and total_actions % config["micro_pause_every"] == 0
-                ):
-                    self.ui_queue.put(
-                        ("status", f"Micro-pause: resting for {config['micro_pause_duration']:.2f}s after {total_actions} action(s).")
-                    )
-                    wake_at = time.perf_counter() + config["micro_pause_duration"]
-                    while time.perf_counter() < wake_at:
-                        if config["runtime_limit"] > 0 and time.perf_counter() - started_at >= config["runtime_limit"]:
-                            self.stop_reason = "runtime_limit"
-                            break
-                        if self._stop_requested(config["stop_hotkey"]):
-                            break
-                        time.sleep(min(0.02, wake_at - time.perf_counter()))
-                    if self.stop_reason == "runtime_limit":
-                        break
-
-                actual_delay = config["delay"]
-                if config["delay_variance"] > 0:
-                    actual_delay = max(0.0, config["delay"] + random.uniform(-config["delay_variance"], config["delay_variance"]))
-
-                if actual_delay > 0:
-                    wake_at = time.perf_counter() + actual_delay
-                    while time.perf_counter() < wake_at:
-                        if config["runtime_limit"] > 0 and time.perf_counter() - started_at >= config["runtime_limit"]:
-                            self.stop_reason = "runtime_limit"
-                            break
-                        if self._stop_requested(config["stop_hotkey"]):
-                            break
-                        time.sleep(min(0.02, wake_at - time.perf_counter()))
-                    if self.stop_reason == "runtime_limit":
-                        break
-
-            try:
-                pyautogui.FAILSAFE = previous_failsafe
-            except Exception:
-                pass
-            elapsed = time.perf_counter() - started_at
-            self.ui_queue.put(("finished", (total_actions, elapsed, last_click_point)))
-
-        def _finish_run(self, total_actions, elapsed, last_click_point):
+        def _finish_run(self, total_actions, elapsed, last_click_point, generation=None):
+            # A "finished" message from an earlier run must never tear down a newer one:
+            # the ~100 ms pump gap used to leave a live run with no handle and a dead Stop button.
+            if generation is not None and generation != self.active_run_generation:
+                return
             self.worker_thread = None
-            if hasattr(self, "start_button"):
-                self.start_button.configure(state=NORMAL)
-            self.stop_button.configure(state=DISABLED)
+            self.pause_event.clear()
+            self._refresh_run_buttons()
             final_stop_reason = self.stop_reason
             action_label = "simulated action(s)" if self.active_run_was_dry_run else "click action(s)"
             run_prefix = "Dry run" if self.active_run_was_dry_run else "Run"
@@ -6514,16 +6105,39 @@ def MAINWINDOW_REDESIGNED():
                 }
             )
             self.run_reports = self.run_reports[-40:]
+            self.lifetime_stats["runs"] = self.lifetime_stats.get("runs", 0) + 1
+            self.lifetime_stats["actions"] = self.lifetime_stats.get("actions", 0) + int(total_actions)
+            self.lifetime_stats["seconds"] = round(self.lifetime_stats.get("seconds", 0.0) + float(elapsed), 3)
+            self._write_run_log(self.run_reports[-1])
             self.stop_reason = "idle"
             self.active_run_was_dry_run = False
             self._schedule_workspace_save()
 
-        def startclick(self):
+        def _busy_subsystem(self):
+            """Name whichever input-injecting subsystem is live, else None."""
             if self.worker_thread and self.worker_thread.is_alive():
-                self.status_var.set("A click run is already active.")
-                return
+                return "click run"
+            if self.sequence_thread and self.sequence_thread.is_alive():
+                return "coordinate sequence"
             if self.is_playing:
-                self.status_var.set("Playback is active. Stop playback before starting a click run.")
+                return "recording playback"
+            return None
+
+        def _refresh_run_buttons(self):
+            """Keep Start/Stop/Pause in step with whatever is actually running."""
+            busy = self._busy_subsystem()
+            if hasattr(self, "start_button"):
+                self.start_button.configure(state=DISABLED if busy else NORMAL)
+            if hasattr(self, "stop_button"):
+                self.stop_button.configure(state=NORMAL if busy else DISABLED)
+            if hasattr(self, "pause_button"):
+                self.pause_button.configure(state=NORMAL if busy else DISABLED)
+                self.pause_button.configure(text="Resume" if self.pause_event.is_set() else "Pause")
+
+        def startclick(self):
+            busy = self._busy_subsystem()
+            if busy:
+                self.status_var.set(f"A {busy} is already active. Stop it before starting a click run.")
                 return
 
             try:
@@ -6533,23 +6147,31 @@ def MAINWINDOW_REDESIGNED():
                 return
 
             self.stop_event.clear()
+            self.pause_event.clear()
             self.stop_reason = "running"
             self.hotkey_notified = False
+            self.rate_samples = []
             self.active_run_was_dry_run = bool(config["dry_run"])
-            if hasattr(self, "start_button"):
-                self.start_button.configure(state=DISABLED)
-            self.stop_button.configure(state=NORMAL)
+            self.run_generation += 1
+            self.active_run_generation = self.run_generation
+            config["generation"] = self.run_generation
+            config["targets"] = self._active_target_list(config)
             self.session_var.set("Starting dry run..." if config["dry_run"] else "Starting click run...")
-            if config["countdown"] > 0:
+            schedule = config.get("schedule") or {}
+            if schedule.get("scheduled"):
+                self.status_var.set(f"Scheduled start armed. {schedule.get('detail', '')}")
+            elif config["countdown"] > 0:
                 self.status_var.set(f"Countdown armed for {config['countdown']:.2f}s. Use Stop or the configured hotkey to cancel.")
             else:
                 self.status_var.set("Dry run started. No clicks will be sent." if config["dry_run"] else "Run started. Use Stop or the configured hotkey to end it.")
+            target_note = f"{len(config['targets'])} target(s)" if len(config["targets"]) > 1 else f"{config['x']}, {config['y']}"
             self._append_activity(
-                f"{'Dry run' if config['dry_run'] else 'Run'} started at {config['x']}, {config['y']} using {config['click_mode']}."
+                f"{'Dry run' if config['dry_run'] else 'Run'} started at {target_note} using {config['click_mode']}."
             )
 
             self.worker_thread = threading.Thread(target=self._click_worker, args=(config,), daemon=True)
             self.worker_thread.start()
+            self._refresh_run_buttons()
 
             if self.minimize_on_start_var.get():
                 self.was_minimized_for_run = True
@@ -6557,56 +6179,114 @@ def MAINWINDOW_REDESIGNED():
 
             self._schedule_workspace_save()
 
+        def _active_target_list(self, config):
+            """Screen points this run cycles through: the recording when round-robin is on."""
+            if self.round_robin_var.get() and self.recording_data:
+                points = []
+                for point in self.recording_data:
+                    try:
+                        points.append((int(point[0]), int(point[1])))
+                    except Exception:
+                        continue
+                if points:
+                    return points
+            return [(config["x"], config["y"])]
+
+        def toggle_pause(self):
+            if not self._busy_subsystem():
+                self.status_var.set("Nothing is running to pause.")
+                return
+            if self.pause_event.is_set():
+                self.pause_event.clear()
+                self.status_var.set("Resuming.")
+                self._append_activity("Run resumed.")
+            else:
+                self.pause_event.set()
+                self.status_var.set("Pause requested. The run holds after the current action.")
+                self._append_activity("Run paused.")
+            self._refresh_run_buttons()
+
         def stopclick(self):
+            stopped_any = False
+            self.pause_event.clear()
             if self.worker_thread and self.worker_thread.is_alive():
                 self.stop_reason = "manual"
                 self.stop_event.set()
                 self.status_var.set("Stop requested. Waiting for the current loop to finish.")
                 self._append_activity("Stop requested for the active run.")
-            elif self.sequence_thread and self.sequence_thread.is_alive():
-                self.stop_event.set()
+                stopped_any = True
+            if self.sequence_thread and self.sequence_thread.is_alive():
+                self.sequence_stop_event.set()
                 self.status_var.set("Stopping coordinate sequence after the current step.")
                 self._append_activity("Stop requested for coordinate sequence.")
-            elif self.is_playing:
-                self.stop_event.set()
+                stopped_any = True
+            if self.is_playing:
+                self.playback_stop_event.set()
                 self.status_var.set("Stopping playback after the current point.")
                 self._append_activity("Stop requested for playback.")
+                stopped_any = True
+            if not stopped_any:
+                self.status_var.set("Nothing is running.")
+            self._refresh_run_buttons()
 
+        def _write_run_log(self, report):
+            """Append one JSON line per finished run to an always-on, size-capped log."""
+            try:
+                log_path = _state_file_location(RUN_LOG_FILE_NAME)
+                os.makedirs(os.path.dirname(log_path), exist_ok=True)
+                if os.path.exists(log_path) and os.path.getsize(log_path) > 1_000_000:
+                    _rotate_run_log(log_path)
+                with open(log_path, "a", encoding="utf-8") as handle:
+                    handle.write(json.dumps(report, sort_keys=True, default=str) + "\n")
+            except Exception:
+                pass
+
+        def _capture_theme_roles(self, widget=None):
+            """Record the palette role of every widget from its authored colour."""
+            widget = self if widget is None else widget
+            for option, sentinels in (("bg", self.BG_ROLE_SENTINELS), ("fg", self.FG_ROLE_SENTINELS)):
+                key = (str(widget), option)
+                if key in self._theme_roles:
+                    continue
+                try:
+                    self._theme_roles[key] = sentinels.get(widget.cget(option))
+                except Exception:
+                    self._theme_roles[key] = None
+            for child in widget.winfo_children():
+                self._capture_theme_roles(child)
 
         def _apply_theme(self):
             palette = self._theme_palette()
             self._refresh_ttk_styles(palette)
+            # Capture first: widgets built since the last pass are still in their authored
+            # colours, and reading them after configure() would record the wrong role.
+            self._capture_theme_roles()
             self.configure(bg=palette["main_bg"])
+
+            # Roles are resolved once, from the widget's build-time colour, and cached by
+            # widget path. Re-deriving the role from the *current* colour on every switch
+            # was self-corrupting: Light hero_bg and Dark main_bg are both #0f172a, so
+            # Dark -> Light left page frames dark and eventually put white text on a light page.
+            roles = self._theme_roles
+
+            def role_for(widget, option, sentinel_map):
+                key = (str(widget), option)
+                if key not in roles:
+                    try:
+                        roles[key] = sentinel_map.get(widget.cget(option))
+                    except Exception:
+                        roles[key] = None
+                return roles[key]
 
             def walk(widget):
                 try:
-                    current_bg = widget.cget("bg")
-                    if current_bg == "#dbe7f2":
-                        widget.configure(bg=palette["main_bg"])
-                    elif current_bg == "#f8fafc":
-                        widget.configure(bg=palette["card_bg"])
-                    elif current_bg == "#edf4ff":
-                        widget.configure(bg=palette["alt_bg"])
-                    elif current_bg == "#0f172a":
-                        widget.configure(bg=palette["hero_bg"])
-                    elif current_bg == "#1e293b":
-                        widget.configure(bg=palette["hero_chip_bg"])
-                    elif current_bg == "white":
-                        widget.configure(bg=palette["list_bg"])
+                    bg_role = role_for(widget, "bg", self.BG_ROLE_SENTINELS)
+                    if bg_role:
+                        widget.configure(bg=palette[bg_role])
 
-                    current_fg = widget.cget("fg")
-                    if current_fg == "#0f172a":
-                        widget.configure(fg=palette["text"])
-                    elif current_fg == "#475569":
-                        widget.configure(fg=palette["sub"])
-                    elif current_fg in ("white", "#f8fafc"):
-                        widget.configure(fg=palette["hero_fg"])
-                    elif current_fg == "#cbd5e1":
-                        widget.configure(fg=palette["hero_sub"])
-                    elif current_fg == "#334155":
-                        widget.configure(fg=palette["sub"])
-                    elif current_fg == "#0f766e":
-                        widget.configure(fg=palette["accent"])
+                    fg_role = role_for(widget, "fg", self.FG_ROLE_SENTINELS)
+                    if fg_role:
+                        widget.configure(fg=palette[fg_role])
 
                     if isinstance(widget, (tk.Frame, tk.Label, tk.Canvas, tk.Text, tk.Listbox)):
                         try:
@@ -6729,264 +6409,6 @@ def MAINWINDOW_REDESIGNED():
             ttk.Button(footer_row, text="Restart Program", style="Secondary.TButton", command=self._restart_program).grid(row=0, column=0, sticky="ew", padx=(0, 8))
             ttk.Button(footer_row, text="Close", style="Secondary.TButton", command=window.destroy).grid(row=0, column=1, sticky="ew")
 
-        def _open_sequence_builder(self):
-            if not _ensure_dependencies("Coordinate Sequence", ["pyautogui"], parent=self):
-                return
-
-            window = tk.Toplevel(self)
-            window.title("Coordinate Sequence")
-            window.geometry("660x540+300+180")
-            window.resizable(False, False)
-            window.attributes("-topmost", True)
-            window.configure(bg="#edf4ff")
-            try:
-                window.iconbitmap(_resource_path("favicon.ico"))
-            except:
-                pass
-
-            steps = []
-            x_var = tk.StringVar(value=self.target_x_var.get())
-            y_var = tk.StringVar(value=self.target_y_var.get())
-            action_var = tk.StringVar(value=self.click_mode_var.get())
-            delay_var = tk.StringVar(value=self.delay_var.get())
-            summary_var = tk.StringVar(value="0 step(s) | 0.00s total wait")
-            helper_var = tk.StringVar(value="Build, reorder, or import a click path before running it.")
-
-            body = tk.Frame(window, bg="#edf4ff", padx=16, pady=16)
-            body.pack(fill="both", expand=True)
-            body.columnconfigure(0, weight=1)
-            body.columnconfigure(1, weight=1)
-
-            tk.Label(body, text="Coordinate Sequence Builder", bg="#edf4ff", fg="#0f172a", font=("Segoe UI", 12, "bold")).grid(row=0, column=0, columnspan=2, sticky="w")
-            tk.Label(body, text="Build a short step-by-step click path, validate it, and run it once.", bg="#edf4ff", fg="#475569", font=("Segoe UI", 9)).grid(row=1, column=0, columnspan=2, sticky="w", pady=(2, 12))
-
-            list_box = Listbox(body, width=64, height=14, font=("Segoe UI", 10), bg="white", fg="#0f172a", selectbackground="#1d4ed8", activestyle="none")
-            list_box.grid(row=2, column=0, columnspan=2, sticky="ew", pady=(0, 8))
-
-            tk.Label(body, textvariable=summary_var, bg="#edf4ff", fg="#0f766e", font=("Segoe UI", 9, "bold")).grid(row=3, column=0, columnspan=2, sticky="w", pady=(0, 10))
-
-            def normalize_steps(raw_steps):
-                return _normalize_sequence_steps(raw_steps, self.CLICK_TYPES)
-
-            def selected_index():
-                selection = list_box.curselection()
-                return selection[0] if selection else None
-
-            def update_summary():
-                total_wait = sum(step[3] for step in steps)
-                summary_var.set(f"{len(steps)} step(s) | {total_wait:.2f}s total wait")
-
-            def render_steps(selected_step=None):
-                list_box.delete(0, END)
-                for index, (x_pos, y_pos, action_name, delay_seconds) in enumerate(steps, start=1):
-                    list_box.insert(END, f"{index}. {action_name} at ({x_pos}, {y_pos}) then wait {delay_seconds:.2f}s")
-                update_summary()
-                if selected_step is not None and 0 <= selected_step < len(steps):
-                    list_box.selection_clear(0, END)
-                    list_box.selection_set(selected_step)
-                    list_box.activate(selected_step)
-
-            def add_step():
-                try:
-                    x_pos = int(x_var.get())
-                    y_pos = int(y_var.get())
-                    delay_seconds = float(delay_var.get())
-                    if delay_seconds < 0:
-                        raise ValueError
-                except:
-                    messagebox.showerror("Invalid step", "Enter valid X, Y, and delay values.", parent=window)
-                    return
-
-                steps.append((x_pos, y_pos, action_var.get(), delay_seconds))
-                render_steps(len(steps) - 1)
-                helper_var.set("Step added to the sequence.")
-
-            def add_cursor_step():
-                try:
-                    current_x, current_y = pyautogui.position()
-                    x_var.set(str(current_x))
-                    y_var.set(str(current_y))
-                    add_step()
-                except Exception as exc:
-                    messagebox.showerror("Capture failed", f"Unable to read the cursor position.\n{exc}", parent=window)
-
-            def import_recording():
-                if not self.recording_data:
-                    messagebox.showinfo("Sequence builder", "There is no active recording to import.", parent=window)
-                    return
-
-                try:
-                    delay_seconds = float(delay_var.get())
-                    if delay_seconds < 0:
-                        raise ValueError
-                except:
-                    messagebox.showerror("Invalid delay", "Enter a valid delay before importing recorded points.", parent=window)
-                    return
-
-                for x_pos, y_pos in self.recording_data:
-                    steps.append((int(x_pos), int(y_pos), action_var.get(), delay_seconds))
-                render_steps(len(steps) - 1)
-                helper_var.set(f"Imported {len(self.recording_data)} recorded point(s).")
-
-            def duplicate_step():
-                current_step = selected_index()
-                if current_step is None:
-                    return
-                steps.insert(current_step + 1, steps[current_step])
-                render_steps(current_step + 1)
-                helper_var.set("Selected step duplicated.")
-
-            def move_step(offset):
-                current_step = selected_index()
-                if current_step is None:
-                    return
-
-                new_index = current_step + offset
-                if new_index < 0 or new_index >= len(steps):
-                    return
-
-                steps[current_step], steps[new_index] = steps[new_index], steps[current_step]
-                render_steps(new_index)
-                helper_var.set("Selected step moved.")
-
-            def delete_step():
-                current_step = selected_index()
-                if current_step is None:
-                    return
-                del steps[current_step]
-                render_steps(min(current_step, len(steps) - 1) if steps else None)
-                helper_var.set("Selected step removed.")
-
-            def clear_steps():
-                if not steps:
-                    return
-                if not messagebox.askyesno("Clear sequence", "Remove every step from the current sequence?", parent=window):
-                    return
-                steps.clear()
-                render_steps()
-                helper_var.set("Sequence cleared.")
-
-            def run_sequence_worker(sequence_copy):
-                completed_steps = 0
-                try:
-                    pyautogui.FAILSAFE = False
-                    for x_pos, y_pos, action_name, delay_seconds in sequence_copy:
-                        if self.stop_event.is_set():
-                            self.ui_queue.put(("status", f"Coordinate sequence stopped after {completed_steps} step(s)."))
-                            self._append_activity(f"Sequence stopped after {completed_steps} step(s).")
-                            return
-
-                        button_name, click_count = self.CLICK_TYPES[action_name]
-                        pyautogui.click(x=x_pos, y=y_pos, button=button_name, clicks=click_count, interval=0.02 if click_count > 1 else 0.0)
-                        completed_steps += 1
-
-                        if delay_seconds > 0:
-                            wake_at = time.perf_counter() + delay_seconds
-                            while time.perf_counter() < wake_at:
-                                if self.stop_event.is_set():
-                                    self.ui_queue.put(("status", f"Coordinate sequence stopped after {completed_steps} step(s)."))
-                                    self._append_activity(f"Sequence stopped after {completed_steps} step(s).")
-                                    return
-                                time.sleep(min(0.02, wake_at - time.perf_counter()))
-
-                    self.ui_queue.put(("status", f"Coordinate sequence complete. Ran {completed_steps} step(s)."))
-                    self._append_activity(f"Sequence complete. Ran {completed_steps} step(s).")
-                except Exception as exc:
-                    self.ui_queue.put(("status", f"Sequence error: {exc}"))
-                    self._append_activity(f"Sequence error: {exc}")
-                finally:
-                    self.sequence_thread = None
-                    self.stop_event.clear()
-
-            def run_sequence():
-                if not steps:
-                    messagebox.showinfo("Sequence builder", "Add at least one step before running the sequence.", parent=window)
-                    return
-                if self.worker_thread and self.worker_thread.is_alive():
-                    messagebox.showinfo("Sequence builder", "Stop the active click run before starting a sequence.", parent=window)
-                    return
-                if self.sequence_thread and self.sequence_thread.is_alive():
-                    messagebox.showinfo("Sequence builder", "A sequence is already running.", parent=window)
-                    return
-                if self.is_playing:
-                    messagebox.showinfo("Sequence builder", "Stop playback before starting a sequence.", parent=window)
-                    return
-
-                sequence_copy = list(steps)
-                self.stop_event.clear()
-                self.status_var.set(f"Running coordinate sequence with {len(sequence_copy)} step(s).")
-                self._append_activity(f"Sequence started with {len(sequence_copy)} step(s).")
-                self.sequence_thread = threading.Thread(target=run_sequence_worker, args=(sequence_copy,), daemon=True)
-                self.sequence_thread.start()
-
-            def save_sequence():
-                if not steps:
-                    messagebox.showinfo("Sequence builder", "Add at least one step before saving.", parent=window)
-                    return
-
-                file_path = filedialog.asksaveasfilename(defaultextension=".json", filetypes=[("JSON files", "*.json")], parent=window)
-                if not file_path:
-                    return
-
-                try:
-                    with open(file_path, "w", encoding="utf-8") as file_handle:
-                        json.dump(steps, file_handle, indent=2)
-                except Exception as exc:
-                    messagebox.showerror("Save failed", f"Unable to save the sequence.\n{exc}", parent=window)
-                    return
-
-                helper_var.set(f"Sequence saved to {os.path.basename(file_path)}.")
-
-            def load_sequence():
-                file_path = filedialog.askopenfilename(filetypes=[("JSON files", "*.json")], parent=window)
-                if not file_path:
-                    return
-
-                try:
-                    normalized_steps = normalize_steps(_load_json_file(file_path))
-                except Exception as exc:
-                    messagebox.showerror("Load failed", f"Unable to load the sequence.\n{exc}", parent=window)
-                    return
-
-                steps.clear()
-                steps.extend(normalized_steps)
-                render_steps(0 if steps else None)
-                helper_var.set(f"Loaded {len(steps)} validated step(s).")
-
-            tk.Label(body, text="X", bg="#edf4ff", fg="#0f172a", font=("Segoe UI", 10, "bold")).grid(row=4, column=0, sticky="w")
-            ttk.Entry(body, textvariable=x_var, width=12).grid(row=5, column=0, sticky="w", pady=(4, 8))
-            tk.Label(body, text="Y", bg="#edf4ff", fg="#0f172a", font=("Segoe UI", 10, "bold")).grid(row=4, column=1, sticky="w")
-            ttk.Entry(body, textvariable=y_var, width=12).grid(row=5, column=1, sticky="w", pady=(4, 8))
-
-            tk.Label(body, text="Action", bg="#edf4ff", fg="#0f172a", font=("Segoe UI", 10, "bold")).grid(row=6, column=0, sticky="w")
-            ttk.Combobox(body, textvariable=action_var, values=tuple(self.CLICK_TYPES.keys()), state="readonly", width=18).grid(row=7, column=0, sticky="w", pady=(4, 8))
-            tk.Label(body, text="Delay after step", bg="#edf4ff", fg="#0f172a", font=("Segoe UI", 10, "bold")).grid(row=6, column=1, sticky="w")
-            ttk.Entry(body, textvariable=delay_var, width=12).grid(row=7, column=1, sticky="w", pady=(4, 8))
-
-            action_row = tk.Frame(body, bg="#edf4ff")
-            action_row.grid(row=8, column=0, columnspan=2, sticky="ew", pady=(4, 0))
-            ttk.Button(action_row, text="Add Step", style="Secondary.TButton", command=add_step).grid(row=0, column=0, padx=(0, 8))
-            ttk.Button(action_row, text="Add Cursor", style="Secondary.TButton", command=add_cursor_step).grid(row=0, column=1, padx=(0, 8))
-            ttk.Button(action_row, text="Import Recording", style="Secondary.TButton", command=import_recording).grid(row=0, column=2, padx=(0, 8))
-            ttk.Button(action_row, text="Duplicate", style="Secondary.TButton", command=duplicate_step).grid(row=0, column=3)
-
-            manage_row = tk.Frame(body, bg="#edf4ff")
-            manage_row.grid(row=9, column=0, columnspan=2, sticky="ew", pady=(8, 0))
-            ttk.Button(manage_row, text="Move Up", style="Secondary.TButton", command=lambda: move_step(-1)).grid(row=0, column=0, padx=(0, 8))
-            ttk.Button(manage_row, text="Move Down", style="Secondary.TButton", command=lambda: move_step(1)).grid(row=0, column=1, padx=(0, 8))
-            ttk.Button(manage_row, text="Delete", style="Secondary.TButton", command=delete_step).grid(row=0, column=2, padx=(0, 8))
-            ttk.Button(manage_row, text="Clear", style="Secondary.TButton", command=clear_steps).grid(row=0, column=3)
-
-            file_row = tk.Frame(body, bg="#edf4ff")
-            file_row.grid(row=10, column=0, columnspan=2, sticky="ew", pady=(8, 0))
-            ttk.Button(file_row, text="Save", style="Secondary.TButton", command=save_sequence).grid(row=0, column=0, padx=(0, 8))
-            ttk.Button(file_row, text="Load", style="Secondary.TButton", command=load_sequence).grid(row=0, column=1, padx=(0, 8))
-            ttk.Button(file_row, text="Run Sequence", style="Accent.TButton", command=run_sequence).grid(row=0, column=2)
-
-            tk.Label(body, textvariable=helper_var, bg="#edf4ff", fg="#475569", font=("Segoe UI", 9), wraplength=620, justify=LEFT).grid(row=11, column=0, columnspan=2, sticky="w", pady=(12, 0))
-
-            render_steps()
-
         def _toggle_recording(self):
             if not self.is_recording:
                 if self.recording_data:
@@ -7034,63 +6456,129 @@ def MAINWINDOW_REDESIGNED():
             if not self.recording_data:
                 messagebox.showinfo("Playback", "No recording found. Record some points first.")
                 return
-            if self.is_playing:
+            busy = self._busy_subsystem()
+            if busy:
+                self.status_var.set(f"Stop the active {busy} before starting playback.")
                 return
-            if self.worker_thread and self.worker_thread.is_alive():
-                self.status_var.set("Stop the active click run before starting playback.")
-                return
-            
-            self.stop_event.clear()
-            self.is_playing = True
-            threading.Thread(target=self._playback_worker, daemon=True).start()
-            self._append_activity(f"{'Playback simulation' if self.dry_run_var.get() else 'Playback'} started for {len(self.recording_data)} recorded point(s).")
 
-        def _playback_worker(self):
-            dry_run = bool(self.dry_run_var.get())
-            self._set_status_safe(f"{'Simulating playback for' if dry_run else 'Playing back'} {len(self.recording_data)} points...")
+            # Snapshot everything off the Tk thread; the worker must not read Tk vars.
             try:
-                delay = float(self.delay_var.get())
-            except:
-                delay = 0.5
-            
-            for i, (x, y) in enumerate(self.recording_data):
-                if self.stop_event.is_set():
-                    break
-                if not dry_run:
-                    pyautogui.click(x=x, y=y)
-                    self.session_clicks += 1
-                self._set_status_safe(f"{'Playback simulation' if dry_run else 'Playback'}: {i+1}/{len(self.recording_data)}")
-                time.sleep(delay)
-            
-            self.is_playing = False
-            if self.stop_event.is_set():
-                self._set_status_safe("Playback stopped.")
-                self._append_activity("Playback stopped before completion.")
-            else:
-                self._set_status_safe("Playback simulation finished." if dry_run else "Playback finished.")
-                self._append_activity(f"{'Playback simulation' if dry_run else 'Playback'} finished after {len(self.recording_data)} point(s).")
-            if self.play_sound_var.get() and winsound:
-                winsound.Beep(1200, 200)
-            self.stop_event.clear()
-            self._schedule_workspace_save()
+                playback_config = self._build_run_config()
+            except ValueError as exc:
+                messagebox.showerror("Invalid configuration", str(exc), parent=self)
+                return
+            playback_config["points"] = [(int(p[0]), int(p[1])) for p in list(self.recording_data)]
+
+            self.playback_stop_event.clear()
+            self.pause_event.clear()
+            self.hotkey_notified = False
+            self.is_playing = True
+            self._refresh_run_buttons()
+            threading.Thread(target=self._playback_worker, args=(playback_config,), daemon=True).start()
+            self._append_activity(
+                f"{'Playback simulation' if playback_config['dry_run'] else 'Playback'} started for "
+                f"{len(playback_config['points'])} recorded point(s)."
+            )
+
+        def _playback_worker(self, config):
+            """Play recorded points using the same action, fail-safe and stop rules as a run."""
+            dry_run = bool(config["dry_run"])
+            points = config["points"]
+            stop_event = self.playback_stop_event
+            previous_failsafe = getattr(pyautogui, "FAILSAFE", True)
+            previous_pause = getattr(pyautogui, "PAUSE", 0.1)
+            completed = 0
+
+            def should_stop():
+                return self._stop_requested(config["stop_hotkey"], stop_event)
+
+            self._set_status_safe(f"{'Simulating playback for' if dry_run else 'Playing back'} {len(points)} points...")
+            try:
+                try:
+                    pyautogui.FAILSAFE = bool(config["pyautogui_failsafe"])
+                    if config.get("pacing_mode", "Precise") == "Precise":
+                        pyautogui.PAUSE = 0
+                except Exception:
+                    pass
+
+                delay = max(0.0, float(config.get("delay", 0.5)))
+                for index, (x_pos, y_pos) in enumerate(points):
+                    if should_stop():
+                        break
+                    if not self._wait_while_paused(config, stop_event):
+                        break
+                    point = (
+                        max(0, min(self.screen_width - 1, int(x_pos))),
+                        max(0, min(self.screen_height - 1, int(y_pos))),
+                    )
+                    self._emit_action(config, point, stop_event)
+                    if not dry_run:
+                        self.session_clicks += 1
+                    completed = index + 1
+                    self._set_status_safe(f"{'Playback simulation' if dry_run else 'Playback'}: {completed}/{len(points)}")
+                    if config["max_actions"] > 0 and completed >= config["max_actions"]:
+                        self._set_status_safe(f"Playback stopped at the {config['max_actions']} action cap.")
+                        break
+                    if not _interruptible_sleep(delay, should_stop):
+                        break
+            except Exception as exc:
+                if exc.__class__.__name__ == "FailSafeException":
+                    self._set_status_safe("Corner fail-safe triggered. Playback stopped.")
+                else:
+                    self._set_status_safe(f"Playback error: {exc}")
+            finally:
+                # is_playing must be cleared on every path, or Start / Play / Run Sequence
+                # all stay locked out for the rest of the session.
+                try:
+                    pyautogui.FAILSAFE = previous_failsafe
+                    pyautogui.PAUSE = previous_pause
+                except Exception:
+                    pass
+                self.is_playing = False
+                stopped = stop_event.is_set()
+                if stopped:
+                    self._set_status_safe("Playback stopped.")
+                    self._append_activity(f"Playback stopped after {completed} of {len(points)} point(s).")
+                else:
+                    self._set_status_safe("Playback simulation finished." if dry_run else "Playback finished.")
+                    self._append_activity(
+                        f"{'Playback simulation' if dry_run else 'Playback'} finished after {completed} point(s)."
+                    )
+                if self.play_sound_var.get() and winsound:
+                    try:
+                        winsound.Beep(1200, 200)
+                    except Exception:
+                        pass
+                stop_event.clear()
+                self.ui_queue.put(("refresh_buttons", None))
+                self._schedule_workspace_save()
 
         def _update_dashboard(self):
             try:
-                # Update total session clicks
                 self.total_session_clicks_var.set(f"Total Session Clicks: {self.session_clicks}")
                 self.recording_summary_var.set(
                     f"Recording: {len(self.recording_data)} point(s) | {'active' if self.is_recording else 'idle'}"
                 )
-                
-                # Update elapsed time
+
                 elapsed = int(time.time() - self.session_start_time)
                 hours, remainder = divmod(elapsed, 3600)
                 minutes, seconds = divmod(remainder, 60)
                 self.session_elapsed_var.set(f"Session Elapsed: {hours:02}:{minutes:02}:{seconds:02}")
-                
-                self.after(1000, self._update_dashboard)
-            except:
+
+                lifetime = self.lifetime_stats
+                self.lifetime_stats_var.set(
+                    f"Lifetime: {lifetime.get('runs', 0)} run(s) | {lifetime.get('actions', 0)} action(s) | "
+                    f"{_format_seconds(lifetime.get('seconds', 0.0))}"
+                )
+            except Exception:
                 pass
+            finally:
+                # Rescheduling from `finally` means one bad frame can no longer freeze
+                # the dashboard for the rest of the session.
+                try:
+                    self.after(1000, self._update_dashboard)
+                except Exception:
+                    pass
 
         def _open_recording_studio(self):
             palette = self._theme_palette()
@@ -7318,8 +6806,7 @@ def MAINWINDOW_REDESIGNED():
                     return
 
                 try:
-                    with open(file_path, "w", encoding="utf-8") as file_handle:
-                        json.dump(self.recording_data, file_handle, indent=2)
+                    _atomic_write_json(file_path, self.recording_data)
                 except Exception as exc:
                     messagebox.showerror("Save failed", f"Unable to save the recording.\n{exc}", parent=window)
                     return
@@ -7450,7 +6937,7 @@ def MAINWINDOW_REDESIGNED():
             tk.Label(body, textvariable=summary_var, bg=palette["alt_bg"], fg=palette["accent"], font=("Segoe UI", 9, "bold")).grid(row=3, column=0, sticky="w", pady=(8, 12))
 
             def normalize_steps(raw_steps):
-                return _normalize_sequence_steps(raw_steps, self.CLICK_TYPES)
+                return _normalize_sequence_steps(raw_steps, self.ACTION_TYPES)
 
             def selected_index():
                 selection = list_box.curselection()
@@ -7463,7 +6950,7 @@ def MAINWINDOW_REDESIGNED():
                 if delay_seconds < 0:
                     raise ValueError("Delay must be zero or greater.")
                 action_name = action_var.get()
-                if action_name not in self.CLICK_TYPES:
+                if action_name not in self.ACTION_TYPES:
                     raise ValueError("Choose a valid action.")
                 return (x_pos, y_pos, action_name, delay_seconds)
 
@@ -7590,53 +7077,62 @@ def MAINWINDOW_REDESIGNED():
                 render_steps()
                 helper_var.set("Sequence cleared.")
 
-            def run_sequence_worker(sequence_copy, loop_count, countdown_seconds, dry_run):
+            def run_sequence_worker(sequence_copy, loop_count, countdown_seconds, dry_run, run_settings):
                 completed_steps = 0
                 previous_failsafe = getattr(pyautogui, "FAILSAFE", True)
+                previous_pause = getattr(pyautogui, "PAUSE", 0.1)
+                stop_event = self.sequence_stop_event
+                stop_hotkey = run_settings.get("stop_hotkey", "")
+
+                def should_stop():
+                    return self._stop_requested(stop_hotkey, stop_event)
+
                 try:
-                    pyautogui.FAILSAFE = bool(self.pyautogui_failsafe_var.get())
+                    pyautogui.FAILSAFE = bool(run_settings.get("pyautogui_failsafe"))
+                    if run_settings.get("pacing_mode", "Precise") == "Precise":
+                        pyautogui.PAUSE = 0
                     if countdown_seconds > 0:
                         target_time = time.perf_counter() + countdown_seconds
                         last_announced = None
-                        while time.perf_counter() < target_time:
-                            if self.stop_event.is_set():
+                        while True:
+                            remaining = target_time - time.perf_counter()
+                            if remaining <= 0:
+                                break
+                            if should_stop():
                                 self.ui_queue.put(("status", "Coordinate sequence cancelled during countdown."))
                                 self._append_activity("Sequence cancelled during countdown.")
                                 return
-                            remaining = max(0, target_time - time.perf_counter())
                             announced_value = int(math.ceil(remaining))
                             if announced_value != last_announced:
                                 self.ui_queue.put(("status", f"Sequence starting in {announced_value}s."))
                                 last_announced = announced_value
-                            time.sleep(min(0.1, remaining))
+                            _interruptible_sleep(min(0.1, remaining), should_stop, slice_seconds=0.05)
 
                     for loop_index in range(loop_count):
                         for x_pos, y_pos, action_name, delay_seconds in sequence_copy:
-                            if self.stop_event.is_set():
+                            if should_stop():
                                 self.ui_queue.put(("status", f"Coordinate sequence stopped after {completed_steps} step(s)."))
                                 self._append_activity(f"Sequence stopped after {completed_steps} step(s).")
                                 return
-                            button_name, click_count = self.CLICK_TYPES[action_name]
-                            if not dry_run:
-                                try:
-                                    pyautogui.click(x=x_pos, y=y_pos, button=button_name, clicks=click_count, interval=0.02 if click_count > 1 else 0.0)
-                                except Exception as exc:
-                                    if exc.__class__.__name__ == "FailSafeException":
-                                        self.ui_queue.put(("status", f"Corner fail-safe stopped the sequence after {completed_steps} step(s)."))
-                                        self._append_activity(f"Corner fail-safe stopped the sequence after {completed_steps} step(s).")
-                                    else:
-                                        self.ui_queue.put(("status", f"Sequence click error: {exc}"))
-                                        self._append_activity(f"Sequence click error: {exc}")
-                                    return
+                            if not self._wait_while_paused(run_settings, stop_event):
+                                self.ui_queue.put(("status", f"Coordinate sequence stopped after {completed_steps} step(s)."))
+                                return
+                            step_config = dict(run_settings, click_mode=action_name, dry_run=dry_run)
+                            try:
+                                self._emit_action(step_config, (x_pos, y_pos), stop_event)
+                            except Exception as exc:
+                                if exc.__class__.__name__ == "FailSafeException":
+                                    self.ui_queue.put(("status", f"Corner fail-safe stopped the sequence after {completed_steps} step(s)."))
+                                    self._append_activity(f"Corner fail-safe stopped the sequence after {completed_steps} step(s).")
+                                else:
+                                    self.ui_queue.put(("status", f"Sequence step error: {exc}"))
+                                    self._append_activity(f"Sequence step error: {exc}")
+                                return
                             completed_steps += 1
-                            if delay_seconds > 0:
-                                wake_at = time.perf_counter() + delay_seconds
-                                while time.perf_counter() < wake_at:
-                                    if self.stop_event.is_set():
-                                        self.ui_queue.put(("status", f"Coordinate sequence stopped after {completed_steps} step(s)."))
-                                        self._append_activity(f"Sequence stopped after {completed_steps} step(s).")
-                                        return
-                                    time.sleep(min(0.02, wake_at - time.perf_counter()))
+                            if delay_seconds > 0 and not _interruptible_sleep(delay_seconds, should_stop):
+                                self.ui_queue.put(("status", f"Coordinate sequence stopped after {completed_steps} step(s)."))
+                                self._append_activity(f"Sequence stopped after {completed_steps} step(s).")
+                                return
                         self.ui_queue.put(("status", f"Sequence loop {loop_index + 1}/{loop_count} complete."))
                     self.ui_queue.put(("status", f"{'Dry-run sequence' if dry_run else 'Coordinate sequence'} complete. Ran {completed_steps} step(s)."))
                     self._append_activity(f"{'Dry-run sequence' if dry_run else 'Sequence'} complete. Ran {completed_steps} step(s).")
@@ -7646,23 +7142,20 @@ def MAINWINDOW_REDESIGNED():
                 finally:
                     try:
                         pyautogui.FAILSAFE = previous_failsafe
+                        pyautogui.PAUSE = previous_pause
                     except Exception:
                         pass
                     self.sequence_thread = None
-                    self.stop_event.clear()
+                    stop_event.clear()
+                    self.ui_queue.put(("refresh_buttons", None))
 
             def launch_sequence(start_from_selected=False):
                 if not steps:
                     messagebox.showinfo("Sequence builder", "Add at least one step before running the sequence.", parent=window)
                     return
-                if self.worker_thread and self.worker_thread.is_alive():
-                    messagebox.showinfo("Sequence builder", "Stop the active click run before starting a sequence.", parent=window)
-                    return
-                if self.sequence_thread and self.sequence_thread.is_alive():
-                    messagebox.showinfo("Sequence builder", "A sequence is already running.", parent=window)
-                    return
-                if self.is_playing:
-                    messagebox.showinfo("Sequence builder", "Stop playback before starting a sequence.", parent=window)
+                busy = self._busy_subsystem()
+                if busy:
+                    messagebox.showinfo("Sequence builder", f"Stop the active {busy} before starting a sequence.", parent=window)
                     return
 
                 try:
@@ -7687,8 +7180,23 @@ def MAINWINDOW_REDESIGNED():
                     sequence_copy = list(steps)
                     start_label = "from the beginning"
 
-                self.stop_event.clear()
+                self.sequence_stop_event.clear()
+                self.pause_event.clear()
+                self.hotkey_notified = False
                 dry_run = bool(self.dry_run_var.get())
+                # Snapshot Tk state here so the worker thread never reads a Tk variable.
+                run_settings = {
+                    "stop_hotkey": self.stop_hotkey_var.get().strip(),
+                    "pyautogui_failsafe": bool(self.pyautogui_failsafe_var.get()),
+                    "pacing_mode": self.pacing_mode_var.get(),
+                    "dry_run": dry_run,
+                    "action_key": self.action_key_var.get().strip(),
+                    "action_text": self.action_text_var.get(),
+                    "scroll_amount": int(self.scroll_amount_var.get() or 3),
+                    "hold_duration": float(self.hold_duration_var.get() or 0.25),
+                    "drag_to_x": int(self.drag_to_x_var.get() or 0),
+                    "drag_to_y": int(self.drag_to_y_var.get() or 0),
+                }
                 self.status_var.set(
                     f"{'Simulating' if dry_run else 'Running'} coordinate sequence {start_label} with {len(sequence_copy)} step(s)."
                 )
@@ -7697,10 +7205,11 @@ def MAINWINDOW_REDESIGNED():
                 )
                 self.sequence_thread = threading.Thread(
                     target=run_sequence_worker,
-                    args=(sequence_copy, loop_count, countdown_seconds, dry_run),
+                    args=(sequence_copy, loop_count, countdown_seconds, dry_run, run_settings),
                     daemon=True,
                 )
                 self.sequence_thread.start()
+                self._refresh_run_buttons()
 
             def save_sequence():
                 if not steps:
@@ -7710,8 +7219,7 @@ def MAINWINDOW_REDESIGNED():
                 if not file_path:
                     return
                 try:
-                    with open(file_path, "w", encoding="utf-8") as file_handle:
-                        json.dump(steps, file_handle, indent=2)
+                    _atomic_write_json(file_path, steps)
                 except Exception as exc:
                     messagebox.showerror("Save failed", f"Unable to save the sequence.\n{exc}", parent=window)
                     return
@@ -7739,7 +7247,7 @@ def MAINWINDOW_REDESIGNED():
             tk.Label(editor_card, text="Y", bg=palette["card_bg"], fg=palette["text"], font=("Segoe UI", 10, "bold")).grid(row=1, column=1, sticky="w", padx=(12, 0), pady=(8, 0))
             ttk.Entry(editor_card, textvariable=y_var, width=12).grid(row=2, column=1, sticky="w", padx=(12, 0), pady=(4, 0))
             tk.Label(editor_card, text="Action", bg=palette["card_bg"], fg=palette["text"], font=("Segoe UI", 10, "bold")).grid(row=1, column=2, sticky="w", padx=(12, 0), pady=(8, 0))
-            ttk.Combobox(editor_card, textvariable=action_var, values=tuple(self.CLICK_TYPES.keys()), state="readonly", width=18).grid(row=2, column=2, sticky="w", padx=(12, 0), pady=(4, 0))
+            ttk.Combobox(editor_card, textvariable=action_var, values=tuple(self.ACTION_TYPES.keys()), state="readonly", width=18).grid(row=2, column=2, sticky="w", padx=(12, 0), pady=(4, 0))
             tk.Label(editor_card, text="Delay after step", bg=palette["card_bg"], fg=palette["text"], font=("Segoe UI", 10, "bold")).grid(row=1, column=3, sticky="w", padx=(12, 0), pady=(8, 0))
             ttk.Entry(editor_card, textvariable=delay_var, width=12).grid(row=2, column=3, sticky="w", padx=(12, 0), pady=(4, 0))
 
@@ -7783,33 +7291,67 @@ def MAINWINDOW_REDESIGNED():
             render_steps()
 
         def _open_mini_control(self):
+            palette = self._theme_palette()
             mini = tk.Toplevel(self)
             mini.overrideredirect(True)
             mini.attributes("-topmost", True)
-            mini.attributes("-alpha", 0.9)
-            mini.geometry("140x50+100+100")
-            mini.configure(bg="#1e293b")
-            
-            # Drag logic
-            def start_move(event): mini.x = event.x; mini.y = event.y
-            def do_move(event):
-                x = mini.winfo_x() + (event.x - mini.x)
-                y = mini.winfo_y() + (event.y - mini.y)
-                mini.geometry(f"+{x}+{y}")
-            mini.bind("<Button-1>", start_move)
-            mini.bind("<B1-Motion>", do_move)
+            mini.attributes("-alpha", 0.92)
+            mini.geometry("232x74+100+100")
+            mini.configure(bg=palette["hero_chip_bg"])
 
-            frame = tk.Frame(mini, bg="#1e293b", padx=5, pady=5)
+            # Drag logic. The grip label is the handle, so the buttons stay clickable.
+            def start_move(event):
+                mini.x, mini.y = event.x, event.y
+
+            def do_move(event):
+                x_pos = mini.winfo_x() + (event.x - mini.x)
+                y_pos = mini.winfo_y() + (event.y - mini.y)
+                mini.geometry(f"+{x_pos}+{y_pos}")
+
+            frame = tk.Frame(mini, bg=palette["hero_chip_bg"], padx=6, pady=5)
             frame.pack(fill="both", expand=True)
-            
-            btn_start = tk.Button(frame, text="Start", bg="#0f766e", fg="white", font=("Segoe UI", 10, "bold"), bd=0, command=self.startclick, width=6)
+
+            grip = tk.Label(frame, text="::", bg=palette["hero_chip_bg"], fg=palette["hero_sub"],
+                            font=("Segoe UI", 11, "bold"), cursor="fleur")
+            grip.pack(side="left", padx=(2, 6))
+            for widget in (mini, frame, grip):
+                widget.bind("<Button-1>", start_move)
+                widget.bind("<B1-Motion>", do_move)
+
+            btn_start = tk.Button(frame, text="Start", bg=palette["accent"], fg="white",
+                                  font=("Segoe UI", 9, "bold"), bd=0, command=self.startclick, width=5)
             btn_start.pack(side="left", padx=2)
-            
-            btn_stop = tk.Button(frame, text="Stop", bg="#b91c1c", fg="white", font=("Segoe UI", 10, "bold"), bd=0, command=self.stopclick, width=6)
+            btn_pause = tk.Button(frame, text="Pause", bg=palette["secondary_bg"], fg=palette["secondary_fg"],
+                                  font=("Segoe UI", 9, "bold"), bd=0, command=self.toggle_pause, width=6)
+            btn_pause.pack(side="left", padx=2)
+            btn_stop = tk.Button(frame, text="Stop", bg=palette["danger"], fg="white",
+                                 font=("Segoe UI", 9, "bold"), bd=0, command=self.stopclick, width=5)
             btn_stop.pack(side="left", padx=2)
-            
-            btn_close = tk.Button(frame, text="X", bg="#1e293b", fg="#94a3b8", font=("Segoe UI", 10, "bold"), bd=0, command=mini.destroy, width=2)
-            btn_close.pack(side="right")
+            tk.Button(frame, text="X", bg=palette["hero_chip_bg"], fg=palette["hero_sub"],
+                      font=("Segoe UI", 9, "bold"), bd=0, command=mini.destroy, width=2).pack(side="right")
+
+            state_var = tk.StringVar(value="Idle")
+            tk.Label(mini, textvariable=state_var, bg=palette["hero_chip_bg"], fg=palette["hero_sub"],
+                     font=("Segoe UI", 8)).place(x=8, y=54)
+
+            def refresh_state():
+                """Mini Control used to give no indication of what the app was doing."""
+                if not mini.winfo_exists():
+                    return
+                busy = self._busy_subsystem()
+                if busy and self.pause_event.is_set():
+                    state_var.set(f"Paused - {busy}")
+                elif busy:
+                    state_var.set(f"Running - {busy}")
+                else:
+                    state_var.set("Idle")
+                btn_start.configure(state=DISABLED if busy else NORMAL)
+                btn_pause.configure(state=NORMAL if busy else DISABLED,
+                                    text="Resume" if self.pause_event.is_set() else "Pause")
+                btn_stop.configure(state=NORMAL if busy else DISABLED)
+                mini.after(250, refresh_state)
+
+            refresh_state()
 
 
 
@@ -7819,8 +7361,10 @@ def MAINWINDOW_REDESIGNED():
                 image = Image.open(_resource_path("favicon.ico"))
                 menu = (
                     item('Restore', self._restore_from_tray),
-                    item('Start Clicker', self.startclick),
-                    item('Stop Clicker', self.stopclick),
+                    # Tray callbacks arrive on the pystray thread; hop to the Tk thread.
+                    item('Start Clicker', lambda: self.after(0, self.startclick)),
+                    item('Pause / Resume', lambda: self.after(0, self.toggle_pause)),
+                    item('Stop Clicker', lambda: self.after(0, self.stopclick)),
                     item('Exit', self.EXITME)
                 )
                 self.tray_icon = pystray.Icon("autoclicker", image, "AutoClicker", menu)
@@ -7846,7 +7390,9 @@ def MAINWINDOW_REDESIGNED():
 
         def EXITME(self):
             self.is_recording = False
-            self.stop_event.set()
+            self.pause_event.clear()
+            for event in (self.stop_event, self.sequence_stop_event, self.playback_stop_event):
+                event.set()
             try:
                 if self.record_hotkey_handle is not None:
                     keyboard.remove_hotkey(self.record_hotkey_handle)
@@ -7857,6 +7403,7 @@ def MAINWINDOW_REDESIGNED():
                     keyboard.remove_hotkey(self.emergency_hotkey_handle)
             except:
                 pass
+            self._unregister_global_hotkeys()
             if self.tray_icon is not None:
                 try:
                     self.tray_icon.stop()
@@ -7864,130 +7411,439 @@ def MAINWINDOW_REDESIGNED():
                     pass
                 self.tray_icon = None
             self._persist_workspace_state()
-            self.stop_event.set()
             self.destroy()
 
     your_gui = YourGUI()
     your_gui.mainloop()
     time.sleep(0)
 
-if __name__ == '__main__':
-    cli_args = sys.argv[1:]
+# --------------------------------------------------------------------------------------
+# Headless command line
+# --------------------------------------------------------------------------------------
 
-    if "--state-json" in cli_args or ("--state-summary" in cli_args and "--json" in cli_args):
-        print(json.dumps(_collect_state_summary_data(), indent=2, sort_keys=True))
-        raise SystemExit(0)
-    if "--state-summary" in cli_args:
-        print(_build_state_summary_report())
-        raise SystemExit(0)
-    if "--backup-state" in cli_args:
-        backup_target = _argument_value(cli_args, "--backup-state")
-        backup_result = _backup_state_files(backup_target)
-        if "--json" in cli_args:
-            print(json.dumps(backup_result, indent=2, sort_keys=True))
-        else:
-            print(f"State backup directory: {backup_result['backup_dir']}")
-            print(f"Copied files: {backup_result['count']}")
-            for copied_file in backup_result["copied_files"]:
-                print(f"- {copied_file}")
-        raise SystemExit(0)
-    if "--validate-recording" in cli_args:
-        recording_path = _argument_value(cli_args, "--validate-recording")
-        if not recording_path:
-            print("--validate-recording requires a JSON file path.", file=sys.stderr)
-            raise SystemExit(2)
+CLI_EXIT_OK = 0
+CLI_EXIT_FAILED = 1
+CLI_EXIT_USAGE = 2
+
+# Legacy V10.1 flags stay supported so existing scripts keep working.
+LEGACY_FLAG_COMMANDS = {
+    "--health-check": ["health"],
+    "--health": ["health"],
+    "--health-json": ["health", "--json"],
+    "--state-summary": ["state-summary"],
+    "--state-json": ["state-summary", "--json"],
+    "--backup-state": ["backup-state"],
+    "--validate-recording": ["validate-recording"],
+    "--validate-sequence": ["validate-sequence"],
+    "--validate-profiles": ["validate-profiles"],
+    "--profile-import-preview": ["profile-preview"],
+}
+
+
+def _cli_envelope(command, ok, data=None, errors=None):
+    """Uniform JSON shape for every command, including usage errors."""
+    return {
+        "schema_version": STATE_SCHEMA_VERSION,
+        "app_version": APP_VERSION,
+        "command": command,
+        "ok": bool(ok),
+        "generated_at": datetime.datetime.now().isoformat(timespec="seconds"),
+        "data": data if data is not None else {},
+        "errors": list(errors or []),
+    }
+
+
+def _translate_legacy_args(argv):
+    """Map old single-flag invocations onto the subcommand grammar.
+
+    Returns (translated_args, ignored_flags). Unknown input passes through so argparse can
+    report it, instead of silently falling through and opening the GUI on a CI runner.
+    """
+    argv = list(argv or [])
+    if not argv:
+        return argv, []
+
+    legacy_flags = [arg for arg in argv if arg.split("=", 1)[0] in LEGACY_FLAG_COMMANDS]
+    if not legacy_flags:
+        return argv, []
+
+    # First flag wins, matching V10.1 dispatch order, but any extras are now reported
+    # rather than silently discarded behind a success exit code.
+    primary = legacy_flags[0]
+    flag_name, _, inline_value = primary.partition("=")
+    translated = list(LEGACY_FLAG_COMMANDS[flag_name])
+
+    value = inline_value or _argument_value(argv, flag_name)
+    if value:
+        translated.append(value)
+    if "--json" in argv and "--json" not in translated:
+        translated.append("--json")
+    return translated, list(legacy_flags[1:])
+
+
+def _build_cli_parser():
+    import argparse
+
+    parser = argparse.ArgumentParser(
+        prog="AutoClicker",
+        description="AutoClicker Control Center. Run with no arguments to open the GUI.",
+        epilog="Exit codes: 0 success, 1 check or validation failure, 2 usage error, 3 internal error.",
+    )
+    parser.add_argument(
+        "--version",
+        action="version",
+        version=f"AutoClicker {APP_VERSION} (Python {sys.version.split()[0]}, {platform.system()})",
+    )
+    subparsers = parser.add_subparsers(dest="command")
+
+    def add(name, help_text):
+        sub = subparsers.add_parser(name, help=help_text)
+        sub.add_argument("--json", action="store_true", help="emit a machine-readable JSON envelope")
+        return sub
+
+    add("gui", "open the Control Center window")
+
+    health = add("health", "report dependency, version and state-file health")
+    health.add_argument("--strict", action="store_true", help="exit 1 when a required dependency is missing")
+
+    add("state-summary", "summarise the saved profile and workspace files")
+
+    backup = add("backup-state", "copy the app-state files into a timestamped folder")
+    backup.add_argument("destination", nargs="?", help="target directory (defaults to the state folder)")
+    backup.add_argument("--dry-run", action="store_true", help="show what would be copied without writing")
+
+    bundle = add("support-bundle", "write a full support bundle for troubleshooting")
+    bundle.add_argument("destination", nargs="?", help="target directory")
+
+    for name, help_text in (
+        ("validate-recording", "validate one or more recording JSON files"),
+        ("validate-sequence", "validate one or more sequence JSON files"),
+        ("validate-profiles", "validate one or more profiles JSON files"),
+    ):
+        sub = add(name, help_text)
+        sub.add_argument("paths", nargs="+", help="one or more JSON files")
+
+    preview = add("profile-preview", "preview importing a profiles file over the saved profiles")
+    preview.add_argument("paths", nargs="+", help="one or more JSON files")
+    preview.add_argument("--show-values", action="store_true", help="include full profile payloads in JSON output")
+
+    profiles = add("profiles", "list saved profiles, or show one by name")
+    profiles.add_argument("name", nargs="?", help="show a single profile instead of listing all")
+
+    readiness = add("readiness", "run the pre-flight readiness checklist for a saved profile")
+    readiness.add_argument("name", help="profile name")
+
+    schema = add("schema", "print the accepted shape of a file or action type")
+    schema.add_argument("kind", choices=("recording", "sequence", "profile", "action"))
+
+    history = add("history", "summarise the persistent run log")
+    history.add_argument("--limit", type=int, default=20, help="how many recent runs to show")
+
+    add("doctor", "report health plus the exact pip command that fixes it")
+
+    return parser
+
+
+def _cli_load_saved_profiles():
+    path = _state_file_location(PROFILE_FILE_NAME)
+    if not os.path.exists(path):
+        return {}, path
+    loaded = _load_json_file(path)
+    return (loaded if isinstance(loaded, dict) else {}), path
+
+
+def _cli_emit(args, command, ok, data, errors, text_lines):
+    """Print either the JSON envelope or the human report, and return the exit code."""
+    errors = list(errors or [])
+    if getattr(args, "json", False):
+        print(json.dumps(_cli_envelope(command, ok, data, errors), indent=2, sort_keys=True, default=str))
+    else:
+        for line in text_lines:
+            print(line)
+        for error in errors:
+            print(error, file=sys.stderr)
+    return CLI_EXIT_OK if ok else CLI_EXIT_FAILED
+
+
+def _cli_validate_files(args, command, validator, describe, extra_errors=None):
+    """Validate every supplied path; the command fails if any single file fails."""
+    results, errors, lines = [], list(extra_errors or []), []
+    file_type = command.replace("validate-", "")
+    for path in args.paths:
         try:
-            validation_result = _validate_recording_file(recording_path)
+            result = validator(path)
         except Exception as exc:
-            validation_result = {"valid": False, "type": "recording", "path": recording_path, "error": str(exc)}
-            if "--json" not in cli_args:
-                print(f"Recording invalid: {exc}", file=sys.stderr)
-            else:
-                print(json.dumps(validation_result, indent=2, sort_keys=True))
-            raise SystemExit(1)
-        if "--json" in cli_args:
-            print(json.dumps(validation_result, indent=2, sort_keys=True))
+            result = {"valid": False, "path": path, "error": str(exc)}
+        result.setdefault("path", path)
+        result["type"] = file_type
+        results.append(result)
+        if result.get("valid"):
+            lines.append(f"OK   {path}: {describe(result)}")
         else:
-            print(f"Recording valid: {validation_result['points']} point(s).")
-        raise SystemExit(0)
-    if "--validate-sequence" in cli_args:
-        sequence_path = _argument_value(cli_args, "--validate-sequence")
-        if not sequence_path:
-            print("--validate-sequence requires a JSON file path.", file=sys.stderr)
-            raise SystemExit(2)
+            errors.append(f"FAIL {path}: {result.get('error', 'did not pass validation')}")
+    ok = bool(results) and all(r.get("valid") for r in results)
+    return _cli_emit(args, command, ok, {"results": results, "count": len(results)}, errors, lines)
+
+
+def _readiness_config_from_profile(profile):
+    """Project a saved profile onto the run-config shape the readiness checker expects."""
+    profile = profile or {}
+
+    def number(name, default=0.0):
         try:
-            validation_result = _validate_sequence_file(sequence_path)
-        except Exception as exc:
-            validation_result = {"valid": False, "type": "sequence", "path": sequence_path, "error": str(exc)}
-            if "--json" not in cli_args:
-                print(f"Sequence invalid: {exc}", file=sys.stderr)
-            else:
-                print(json.dumps(validation_result, indent=2, sort_keys=True))
-            raise SystemExit(1)
-        if "--json" in cli_args:
-            print(json.dumps(validation_result, indent=2, sort_keys=True))
-        else:
-            print(
-                f"Sequence valid: {validation_result['steps']} step(s), "
-                f"{validation_result['total_wait_seconds']:.3f}s total wait."
-            )
-        raise SystemExit(0)
-    if "--validate-profiles" in cli_args or "--profile-import-preview" in cli_args:
-        profile_flag = "--profile-import-preview" if "--profile-import-preview" in cli_args else "--validate-profiles"
-        profiles_path = _argument_value(cli_args, profile_flag)
-        if not profiles_path:
-            print(f"{profile_flag} requires a JSON file path.", file=sys.stderr)
-            raise SystemExit(2)
-        existing_profiles = None
-        if profile_flag == "--profile-import-preview":
-            existing_profile_path = _state_file_location(PROFILE_FILE_NAME)
-            if os.path.exists(existing_profile_path):
-                try:
-                    loaded_existing_profiles = _load_json_file(existing_profile_path)
-                    if isinstance(loaded_existing_profiles, dict):
-                        existing_profiles = loaded_existing_profiles
-                except Exception:
-                    existing_profiles = None
+            return float(profile.get(name, default))
+        except Exception:
+            return default
+
+    repeat_limit = None
+    if str(profile.get("repeat_mode", "Infinite")) == "Burst Count":
         try:
-            validation_result = _validate_profiles_file(
-                profiles_path,
-                existing_profiles=existing_profiles,
-            )
-        except Exception as exc:
-            validation_result = {
-                "valid": False,
-                "type": "profiles",
-                "path": profiles_path,
-                "mode": profile_flag.lstrip("-"),
-                "error": str(exc),
+            repeat_limit = int(profile.get("repeat_count", 0))
+        except Exception:
+            repeat_limit = None
+
+    return {
+        "x": int(number("target_x")),
+        "y": int(number("target_y")),
+        "delay": number("delay"),
+        "runtime_limit": number("runtime_limit"),
+        "max_actions": int(number("max_actions")),
+        "repeat_limit": repeat_limit,
+        "stop_hotkey": str(profile.get("stop_hotkey", "")),
+        "dry_run": bool(profile.get("dry_run")),
+        "pyautogui_failsafe": bool(profile.get("pyautogui_failsafe")),
+        "human_like": bool(profile.get("human_like")),
+        "pacing_mode": str(profile.get("pacing_mode", "Precise")),
+        "click_mode": str(profile.get("click_mode", "Left Click")),
+        "action_key": profile.get("action_key", ACTION_DEFAULTS["action_key"]),
+        "action_text": profile.get("action_text", ACTION_DEFAULTS["action_text"]),
+        "scroll_amount": profile.get("scroll_amount", ACTION_DEFAULTS["scroll_amount"]),
+        "hold_duration": profile.get("hold_duration", ACTION_DEFAULTS["hold_duration"]),
+        "drag_to_x": profile.get("drag_to_x", ACTION_DEFAULTS["drag_to_x"]),
+        "drag_to_y": profile.get("drag_to_y", ACTION_DEFAULTS["drag_to_y"]),
+        "schedule": _parse_scheduled_start(profile.get("scheduled_start")),
+    }
+
+
+def _describe_schema(kind):
+    """Machine-readable description of each accepted file or action shape."""
+    if kind == "recording":
+        return {
+            "kind": "recording",
+            "description": "JSON array of [x, y] screen points.",
+            "max_points": 200,
+            "example": [[100, 200], [340, 512]],
+        }
+    if kind == "sequence":
+        return {
+            "kind": "sequence",
+            "description": "JSON array of [x, y, action_name, delay_seconds] steps.",
+            "action_names": sorted(ACTION_REGISTRY),
+            "example": [[100, 200, "Left Click", 0.5], [340, 512, "Scroll Down", 0.25]],
+        }
+    if kind == "profile":
+        return {
+            "kind": "profile",
+            "description": "JSON object mapping profile name to a settings object.",
+            "fields": sorted(PROFILE_FIELDS),
+            "int_fields": sorted(PROFILE_INT_FIELDS),
+            "float_fields": sorted(PROFILE_FLOAT_FIELDS),
+            "bool_fields": sorted(PROFILE_BOOL_FIELDS),
+            "enum_fields": {name: sorted(values) for name, values in PROFILE_ENUM_FIELDS.items()},
+        }
+    return {
+        "kind": "action",
+        "description": "Actions the run engine can emit.",
+        "actions": {
+            name: {
+                "kind": spec["kind"],
+                "uses": list(spec.get("uses", ())),
+                "button": spec.get("button"),
+                "clicks": spec.get("clicks"),
             }
-            if "--json" in cli_args:
-                print(json.dumps(validation_result, indent=2, sort_keys=True))
+            for name, spec in ACTION_REGISTRY.items()
+        },
+        "defaults": dict(ACTION_DEFAULTS),
+    }
+
+
+def _run_cli(argv):
+    """Dispatch a headless command. Returns an exit code, or None to open the GUI."""
+    translated, ignored_flags = _translate_legacy_args(argv)
+    parser = _build_cli_parser()
+    args = parser.parse_args(translated)
+    command = args.command
+
+    if command is None or command == "gui":
+        return None
+
+    conflict_errors = []
+    if ignored_flags:
+        # V10.1 dropped later subcommands silently and still exited 0, so a CI job could
+        # turn green without running the check it asked for.
+        conflict_errors.append(
+            f"Ignored extra legacy flag(s): {', '.join(ignored_flags)}. Run one command at a time."
+        )
+
+    if command in ("health", "doctor"):
+        data = _collect_headless_health_data()
+        missing = data.get("missing_required") or []
+        missing_optional = sorted(
+            name for name, item in data["dependencies"].items()
+            if not item["available"] and not item.get("required")
+        )
+        strict = bool(getattr(args, "strict", False))
+        data["fix_command"] = f"pip install {' '.join(missing)}" if missing else ""
+        data["missing_optional"] = missing_optional
+        lines = _build_headless_health_report().split("\n")
+        if command == "doctor":
+            lines += ["", "Doctor"]
+            if missing:
+                lines.append(f"- Required, install now: pip install {' '.join(missing)}")
+            if missing_optional:
+                lines.append(f"- Optional, unlocks more features: pip install {' '.join(missing_optional)}")
+            if not missing and not missing_optional:
+                lines.append("- Everything this app can use is installed.")
+        # `health` stays exit 0 by default for backwards compatibility; --strict and
+        # `doctor` are the gate-able forms.
+        fail_on_missing = strict or command == "doctor"
+        errors = conflict_errors + ([f"Missing required dependency: {name}" for name in missing] if fail_on_missing else [])
+        ok = not (fail_on_missing and missing)
+        return _cli_emit(args, command, ok, data, errors, lines)
+
+    if command == "state-summary":
+        data = _collect_state_summary_data()
+        errors = list(conflict_errors)
+        for key in ("profiles", "workspace"):
+            entry = data.get(key)
+            if isinstance(entry, dict) and entry.get("error"):
+                errors.append(f"{key}: {entry['error']}")
+        ok = not any(e for e in errors if not e.startswith("Ignored"))
+        return _cli_emit(args, command, ok, data, errors, _build_state_summary_report().split("\n"))
+
+    if command == "backup-state":
+        if args.dry_run:
+            summary = _collect_state_summary_data()
+            planned = [entry["path"] for entry in summary.values()
+                       if isinstance(entry, dict) and entry.get("present")]
+            lines = ["Dry run: nothing written.", f"Would copy {len(planned)} file(s):"]
+            lines += [f"- {path}" for path in planned]
+            return _cli_emit(args, command, True, {"dry_run": True, "planned_files": planned}, conflict_errors, lines)
+        result = _backup_state_files(args.destination)
+        lines = [f"State backup directory: {result['backup_dir']}", f"Copied files: {result['count']}"]
+        lines += [f"- {name}" for name in result["copied_files"]]
+        return _cli_emit(args, command, True, result, conflict_errors, lines)
+
+    if command == "support-bundle":
+        result = _build_support_bundle(args.destination)
+        lines = [f"Support bundle: {result.get('bundle_dir', '?')}", f"Files: {len(result.get('files', []))}"]
+        lines += [f"- {name}" for name in result.get("files", [])]
+        return _cli_emit(args, command, True, result, conflict_errors, lines)
+
+    if command == "validate-recording":
+        return _cli_validate_files(args, command, _validate_recording_file,
+                                   lambda r: f"{r['points']} point(s)", conflict_errors)
+    if command == "validate-sequence":
+        return _cli_validate_files(args, command, _validate_sequence_file,
+                                   lambda r: f"{r['steps']} step(s), {r['total_wait_seconds']:.3f}s total wait",
+                                   conflict_errors)
+    if command == "validate-profiles":
+        return _cli_validate_files(args, command, _validate_profiles_file,
+                                   lambda r: f"{r['valid_count']} valid, {r['invalid_count']} invalid",
+                                   conflict_errors)
+
+    if command == "profile-preview":
+        existing, _path = _cli_load_saved_profiles()
+        results, errors, lines = [], list(conflict_errors), []
+        for path in args.paths:
+            try:
+                result = _validate_profiles_file(path, existing_profiles=existing)
+            except Exception as exc:
+                result = {"valid": False, "path": path, "error": str(exc)}
+            result.setdefault("path", path)
+            if not args.show_values:
+                # Payloads carry hotkeys and window layouts; dumping them is opt-in.
+                result.pop("profiles", None)
+            results.append(result)
+            if result.get("valid"):
+                lines.append(
+                    f"OK   {path}: {result['valid_count']} valid, {result['invalid_count']} invalid, "
+                    f"{result['overwrite_count']} overwrite(s)"
+                )
             else:
-                print(f"Profiles invalid: {exc}", file=sys.stderr)
-            raise SystemExit(1)
-        validation_result["type"] = "profiles"
-        validation_result["mode"] = profile_flag.lstrip("-")
-        if "--json" in cli_args:
-            print(json.dumps(validation_result, indent=2, sort_keys=True))
-        else:
-            print(
-                f"Profiles {'valid' if validation_result['valid'] else 'need attention'}: "
-                f"{validation_result['valid_count']} valid, "
-                f"{validation_result['invalid_count']} invalid, "
-                f"{validation_result['overwrite_count']} overwrite(s)."
+                errors.append(f"FAIL {path}: {result.get('error', 'did not pass validation')}")
+        ok = bool(results) and all(r.get("valid") for r in results)
+        return _cli_emit(args, command, ok, {"results": results}, errors, lines)
+
+    if command == "profiles":
+        profiles, path = _cli_load_saved_profiles()
+        if args.name:
+            profile = profiles.get(args.name)
+            if profile is None:
+                return _cli_emit(args, command, False, {"path": path, "name": args.name},
+                                 conflict_errors + [f"No saved profile named '{args.name}'."], [])
+            lines = [f"Profile: {args.name}"] + [f"- {key}: {value}" for key, value in sorted(profile.items())]
+            return _cli_emit(args, command, True,
+                             {"path": path, "name": args.name, "profile": profile}, conflict_errors, lines)
+        names = sorted(profiles)
+        lines = [f"Profiles file: {path}", f"Saved profiles: {len(names)}"] + [f"- {name}" for name in names]
+        return _cli_emit(args, command, True,
+                         {"path": path, "names": names, "count": len(names)}, conflict_errors, lines)
+
+    if command == "readiness":
+        profiles, path = _cli_load_saved_profiles()
+        profile = profiles.get(args.name)
+        if profile is None:
+            return _cli_emit(args, command, False, {"path": path, "name": args.name},
+                             conflict_errors + [f"No saved profile named '{args.name}'."], [])
+        validation = _validate_profile_data(args.name, profile)
+        readiness = _build_readiness_checklist(_readiness_config_from_profile(profile))
+        ok = bool(readiness["ready"] and validation["valid"])
+        errors = conflict_errors + ([] if validation["valid"] else list(validation["errors"]))
+        return _cli_emit(args, command, ok,
+                         {"name": args.name, "readiness": readiness, "validation": validation},
+                         errors, _format_readiness_text(readiness, limit=20).split("\n"))
+
+    if command == "schema":
+        data = _describe_schema(args.kind)
+        lines = [f"{args.kind} schema", ""] + json.dumps(data, indent=2, sort_keys=True).split("\n")
+        return _cli_emit(args, command, True, data, conflict_errors, lines)
+
+    if command == "history":
+        log_path = _state_file_location(RUN_LOG_FILE_NAME)
+        records = _read_run_log(log_path, limit=max(1, args.limit))
+        summary = _summarize_run_history(records)
+        lines = [
+            f"Run log: {log_path}",
+            f"{summary['runs']} run(s) ({summary['live_runs']} live, {summary['dry_runs']} dry), "
+            f"{summary['actions']} action(s), {_format_seconds(summary['seconds'])}, "
+            f"{summary['average_cps']:.2f} action(s)/sec average",
+            "",
+        ]
+        for record in reversed(records):
+            lines.append(
+                f"{record.get('finished_at', '?')}  {'DRY ' if record.get('dry_run') else 'LIVE'}  "
+                f"{record.get('click_mode', '?')}  {record.get('actions', 0)} action(s)  "
+                f"{record.get('stop_reason', '?')}"
             )
-            if validation_result["invalid_count"]:
-                for invalid_profile in validation_result["invalid_profiles"]:
-                    print(f"- {invalid_profile['name']}: {'; '.join(invalid_profile['errors'])}")
-        raise SystemExit(0 if validation_result["valid"] else 1)
-    if "--health-json" in cli_args or ("--health-check" in cli_args and "--json" in cli_args):
-        print(json.dumps(_collect_headless_health_data(), indent=2, sort_keys=True))
-        raise SystemExit(0)
-    if any(argument in ("--health-check", "--health") for argument in cli_args):
-        print(_build_headless_health_report())
-        raise SystemExit(0)
-    MAINWINDOW_REDESIGNED()
+        if not records:
+            lines.append("No runs recorded yet.")
+        return _cli_emit(args, command, True,
+                         {"log_path": log_path, "summary": summary, "runs": records}, conflict_errors, lines)
+
+    parser.error(f"Unknown command: {command}")
 
 
+if __name__ == '__main__':
+    try:
+        _exit_code = _run_cli(sys.argv[1:])
+    except SystemExit:
+        raise
+    except Exception as _exc:
+        print(f"AutoClicker failed: {_exc}", file=sys.stderr)
+        raise SystemExit(3)
 
+    if _exit_code is None:
+        MAINWINDOW_REDESIGNED()
+    else:
+        raise SystemExit(_exit_code)

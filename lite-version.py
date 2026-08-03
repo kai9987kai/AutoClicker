@@ -6,6 +6,24 @@ import sys
 
 IMPORT_ERRORS = {}
 
+
+def _resource_path(file_name):
+    """Resolve bundled resources from source checkouts and PyInstaller builds.
+
+    A bare relative path meant the icon vanished whenever the app was launched from
+    any directory other than the one holding the script.
+    """
+    import os
+
+    for root in (getattr(sys, "_MEIPASS", None), os.path.dirname(os.path.abspath(__file__)), os.getcwd()):
+        if not root:
+            continue
+        candidate = os.path.join(root, file_name)
+        if os.path.exists(candidate):
+            return candidate
+    return file_name
+
+
 try:
     import keyboard
 except Exception as exc:
@@ -61,13 +79,15 @@ class AutoClickerGUI(tk.Tk):
     def __init__(self):
         super().__init__()
         self.title("AutoClicker Lite")
-        self.geometry("360x500+400+260")
+        self.geometry("380x600+400+220")
         self.attributes("-topmost", True)
         self.configure(bg="#0f172a")
-        self.resizable(False, False)
+        # Fixed-size meant controls were clipped under display scaling.
+        self.resizable(True, True)
+        self.minsize(340, 420)
 
         try:
-            self.iconbitmap("favicon.ico")
+            self.iconbitmap(_resource_path("favicon.ico"))
         except:
             pass
 
@@ -76,6 +96,7 @@ class AutoClickerGUI(tk.Tk):
         self.click_mode_var = tk.StringVar(value="Left Click")
         self.delay_var = tk.StringVar(value="0.10")
         self.stop_hotkey_var = tk.StringVar(value="q")
+        self.capture_hotkey_var = tk.StringVar(value="f8")
         self.repeat_mode_var = tk.StringVar(value="Infinite")
         self.burst_count_var = tk.StringVar(value="25")
         self.status_var = tk.StringVar(value="Ready. Capture a point and press Start.")
@@ -84,12 +105,19 @@ class AutoClickerGUI(tk.Tk):
         self.is_running = False
         self.stop_event = threading.Event()
         self.session_clicks = 0
+        self.capture_hotkey_handle = None
 
         self._build_ui()
 
         self.repeat_mode_var.trace_add("write", self._update_repeat_state)
         self._update_repeat_state()
         self._apply_dependency_state()
+        self.protocol("WM_DELETE_WINDOW", self._handle_close)
+
+    def _handle_close(self):
+        self.stop_event.set()
+        self._disarm_hotkey_capture()
+        self.destroy()
 
     def _build_ui(self):
         tk.Label(
@@ -116,7 +144,9 @@ class AutoClickerGUI(tk.Tk):
         tk.Label(card, text="Target Y", bg="#f8fafc", fg="#0f172a", font=("Segoe UI", 9, "bold")).grid(row=1, column=0, sticky="w", pady=(0, 6))
         ttk.Entry(card, textvariable=self.input_y_var, width=14).grid(row=1, column=1, sticky="ew", pady=(0, 6))
         self.capture_button = ttk.Button(card, text="Use Current Cursor", command=self._capture_cursor)
-        self.capture_button.grid(row=2, column=0, columnspan=2, sticky="ew", pady=(2, 10))
+        self.capture_button.grid(row=2, column=0, columnspan=2, sticky="ew", pady=(2, 4))
+        self.capture_hotkey_button = ttk.Button(card, text="Arm Capture Hotkey", command=self._arm_hotkey_capture)
+        self.capture_hotkey_button.grid(row=9, column=0, columnspan=2, sticky="ew", pady=(0, 10))
 
         tk.Label(card, text="Click type", bg="#f8fafc", fg="#0f172a", font=("Segoe UI", 9, "bold")).grid(row=3, column=0, sticky="w", pady=(0, 6))
         ttk.Combobox(
@@ -144,13 +174,16 @@ class AutoClickerGUI(tk.Tk):
         self.burst_entry = ttk.Entry(card, textvariable=self.burst_count_var)
         self.burst_entry.grid(row=7, column=1, sticky="ew", pady=(0, 6))
 
+        tk.Label(card, text="Capture hotkey", bg="#f8fafc", fg="#0f172a", font=("Segoe UI", 9, "bold")).grid(row=8, column=0, sticky="w", pady=(0, 6))
+        ttk.Entry(card, textvariable=self.capture_hotkey_var).grid(row=8, column=1, sticky="ew", pady=(0, 6))
+
         tk.Label(
             card,
             textvariable=self.session_var,
             bg="#f8fafc",
             fg="#0f766e",
             font=("Segoe UI", 9, "bold"),
-        ).grid(row=8, column=0, columnspan=2, sticky="w", pady=(8, 0))
+        ).grid(row=10, column=0, columnspan=2, sticky="w", pady=(8, 0))
 
         button_row = tk.Frame(self, bg="#0f172a")
         button_row.pack(fill="x", padx=16, pady=18)
@@ -211,6 +244,7 @@ class AutoClickerGUI(tk.Tk):
             self.burst_entry.configure(state="normal")
 
     def _capture_cursor(self):
+        """Capture where the cursor is now (the button click position, by definition)."""
         if not _ensure_dependencies("AutoClicker Lite", ["pyautogui"], parent=self):
             return
 
@@ -223,6 +257,42 @@ class AutoClickerGUI(tk.Tk):
         self.input_x_var.set(str(x_pos))
         self.input_y_var.set(str(y_pos))
         self.status_var.set(f"Captured cursor position {x_pos}, {y_pos}.")
+
+    def _arm_hotkey_capture(self):
+        """Arm a global hotkey so the target can be captured anywhere on screen.
+
+        Clicking "Use Current Cursor" can only ever record the position of that button.
+        Arming a hotkey lets the user point at the real target first, then press a key.
+        """
+        if not _ensure_dependencies("AutoClicker Lite", ["pyautogui", "keyboard"], parent=self):
+            return
+        if self.capture_hotkey_handle is not None:
+            self._disarm_hotkey_capture()
+            return
+
+        hotkey = self.capture_hotkey_var.get().strip() or "f8"
+        try:
+            self.capture_hotkey_handle = keyboard.add_hotkey(
+                hotkey, lambda: self.after(0, self._capture_cursor)
+            )
+        except Exception as exc:
+            messagebox.showerror("Capture hotkey", f"Could not register '{hotkey}'.\n{exc}", parent=self)
+            self.capture_hotkey_handle = None
+            return
+
+        self.capture_hotkey_button.configure(text=f"Disarm '{hotkey}'")
+        self.status_var.set(f"Point at the target, then press '{hotkey}' to capture it.")
+
+    def _disarm_hotkey_capture(self):
+        if self.capture_hotkey_handle is not None:
+            try:
+                keyboard.remove_hotkey(self.capture_hotkey_handle)
+            except Exception:
+                pass
+        self.capture_hotkey_handle = None
+        if hasattr(self, "capture_hotkey_button"):
+            self.capture_hotkey_button.configure(text="Arm Capture Hotkey")
+        self.status_var.set("Capture hotkey disarmed.")
 
     def _set_running_state(self, running):
         self.is_running = running

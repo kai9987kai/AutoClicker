@@ -7,7 +7,21 @@ from pathlib import Path
 from tkinter import filedialog, messagebox
 
 APP_NAME = "AutoClicker"
-VERSION = "V10.1"
+
+
+def _app_version(default="V11.0"):
+    """Prefer the version recorded in the source tree; fall back when frozen."""
+    source_file = Path(__file__).resolve().parents[1] / "AutoClicker.py"
+    try:
+        for line in source_file.read_text(encoding="utf-8").splitlines():
+            if line.startswith("APP_VERSION"):
+                return line.split("=", 1)[1].strip().strip('"').strip("'")
+    except Exception:
+        pass
+    return default
+
+
+VERSION = _app_version()
 PAYLOAD_FILES = (
     "AutoClicker.exe",
     "AutoClickerLite.exe",
@@ -90,6 +104,43 @@ def create_shortcut(shortcut_path, target_path, icon_path, working_dir):
     shortcut.Save()
 
 
+def assert_safe_install_dir(install_dir):
+    """Refuse to recursively delete anything that is not an AutoClicker install.
+
+    `--install-dir` feeds straight into shutil.rmtree, so pointing it at C:\\ or at a
+    home directory would wipe it. A target must be non-existent, empty, or a directory
+    this installer previously wrote.
+    """
+    install_dir = Path(install_dir).resolve()
+
+    forbidden = {Path(p).resolve() for p in filter(None, (
+        os.environ.get("SystemDrive", "C:") + os.sep,
+        os.environ.get("SystemRoot"),
+        os.environ.get("ProgramFiles"),
+        os.environ.get("USERPROFILE"),
+        os.environ.get("APPDATA"),
+        os.environ.get("LOCALAPPDATA"),
+        str(Path.home()),
+    ))}
+    if install_dir in forbidden or install_dir.parent == install_dir:
+        raise ValueError(f"Refusing to install into a protected location: {install_dir}")
+
+    if not install_dir.exists():
+        return install_dir
+    if not install_dir.is_dir():
+        raise ValueError(f"Install target is not a directory: {install_dir}")
+
+    existing = set(os.listdir(install_dir))
+    if not existing:
+        return install_dir
+    if existing <= set(PAYLOAD_FILES) or (install_dir / "AutoClicker.exe").exists():
+        return install_dir
+    raise ValueError(
+        f"Refusing to erase {install_dir}: it is not empty and does not look like an "
+        f"existing {APP_NAME} install."
+    )
+
+
 def install_payload(install_dir, make_shortcuts):
     source_root = payload_root()
     missing_files = [name for name in PAYLOAD_FILES if not (source_root / name).exists()]
@@ -98,6 +149,7 @@ def install_payload(install_dir, make_shortcuts):
             "Installer payload is incomplete. Missing: " + ", ".join(missing_files)
         )
 
+    install_dir = assert_safe_install_dir(install_dir)
     if install_dir.exists():
         shutil.rmtree(install_dir)
     install_dir.mkdir(parents=True, exist_ok=True)

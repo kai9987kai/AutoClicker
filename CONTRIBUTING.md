@@ -94,51 +94,57 @@ refactor/cleanup-cli-options
 
 ## Installing Dependencies
 
-Install the project dependencies before making changes:
+This is a Python 3.10+ project. Install the runtime dependencies before making changes:
 
 ```bash
-npm install
+pip install -r requirements.txt
 ```
 
-If the project uses a different package manager, use the appropriate command:
+Only `pyautogui` and `keyboard` are required; everything else is optional and the app
+degrades gracefully without it. To check what you are missing:
 
 ```bash
-yarn install
-```
-
-or
-
-```bash
-pnpm install
+python AutoClicker.py doctor
 ```
 
 ---
 
 ## Running the Project Locally
 
-Use the relevant development command:
+Launch the full Control Center:
 
 ```bash
-npm run dev
+python AutoClicker.py
 ```
 
-or, if the project does not have a development server:
+Or the lite launcher:
 
 ```bash
-npm start
+python lite-version.py
 ```
 
-Check the `package.json` scripts for the exact commands available.
+The headless commands need no display, which makes them the fastest way to sanity-check a
+change:
+
+```bash
+python AutoClicker.py --help
+```
 
 ---
 
 ## Running Tests
 
-Before submitting a pull request, run the test suite:
+Before submitting a pull request, run the test suite from the repository root:
 
 ```bash
-npm test
+python -m unittest discover -s tests -t . -v
 ```
+
+`pytest` also works. The tests need no third-party package, so they run anywhere.
+
+New logic belongs in a module-level `_helper()` function wherever possible: the GUI class
+lives inside `MAINWINDOW_REDESIGNED()` and is not importable, so only module-level code can
+be unit-tested.
 
 If you add new functionality, please add tests when possible.
 
@@ -167,13 +173,13 @@ This project prefers:
 Run linting with:
 
 ```bash
-npm run lint
+python -m compileall -q AutoClicker.py lite-version.py packaging/ tests/
 ```
 
 If formatting is available, run:
 
 ```bash
-npm run format
+python -m ruff check .
 ```
 
 ---
@@ -245,7 +251,7 @@ What happened instead?
 
 - OS:
 - Browser:
-- Node version:
+- Python version:
 - Transcriptase version/commit:
 
 ## Extra Context

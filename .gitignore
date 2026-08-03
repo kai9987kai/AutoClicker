@@ -106,3 +106,12 @@ venv.bak/
 # Local app state
 autoclicker_profiles.json
 autoclicker_workspace.json
+
+# Never commit service-account keys or any other secret payload.
+creds.json
+**/creds.json
+*.pem
+*.key
+
+# Local run log
+autoclicker_runs.log

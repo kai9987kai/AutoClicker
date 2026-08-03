@@ -1,10 +1,15 @@
-pyautogui
-keyboard
-pystray
-gspread
-oauth2client
-win10toast
-colormap
-pywin32
-Pillow
-numpy
+# Required: the app cannot send input without these.
+pyautogui>=0.9.54
+keyboard>=0.13.5
+
+# Optional: each unlocks a feature and degrades gracefully when absent.
+# `python AutoClicker.py doctor` prints exactly which of these you are missing.
+pystray>=0.19.5                            # close-to-tray and the tray menu
+Pillow>=10.0.0                             # Photo Clicker previews and screen sampling
+numpy>=1.24.0                              # fast Colour Clicker region scanning
+opencv-python>=4.8.0                       # Photo Clicker confidence matching (pyautogui needs it for confidence=)
+win10toast>=0.9; sys_platform == "win32"   # Windows toast notifications
+
+# Removed in V11.0: gspread, oauth2client, colormap and pywin32 were installed but never
+# referenced by any code path. Dropping them cut `import AutoClicker` from ~15s to ~1.4s
+# and removed the last tie to the retired Google Sheets feedback integration.

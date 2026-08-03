@@ -1,0 +1,81 @@
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    name: tests (${{ matrix.os }}, py${{ matrix.python-version }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+        python-version: ["3.10", "3.12"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      # The test suite deliberately needs no third-party package: it exercises the
+      # module-level helpers and the headless CLI, both of which degrade gracefully
+      # when pyautogui/keyboard are absent. That keeps CI to well under a minute.
+      - name: Install tkinter (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y python3-tk
+
+      - name: Byte-compile every source file
+        run: python -m compileall -q AutoClicker.py lite-version.py packaging/ tests/
+
+      - name: Run tests
+        run: python -m unittest discover -s tests -t . -v
+
+      - name: Smoke-test the headless CLI
+        run: |
+          python AutoClicker.py --version
+          python AutoClicker.py health --json
+          python AutoClicker.py state-summary --json
+          python AutoClicker.py schema action --json
+          python AutoClicker.py history --json
+
+      - name: Unknown flags must fail rather than open a GUI
+        shell: bash
+        run: |
+          if python AutoClicker.py --definitely-not-a-flag; then
+            echo "Expected a usage error (exit 2) but the command succeeded."
+            exit 1
+          fi
+
+  secrets:
+    name: secret scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # A live Google service-account key was committed in this repo's history; this
+      # step exists so a replacement cannot land unnoticed.
+      - name: Fail on tracked credential files
+        run: |
+          if git ls-files | grep -Ei '(^|/)creds\.json$|\.pem$|\.key$'; then
+            echo "A credential file is tracked. Remove it and rotate the secret."
+            exit 1
+          fi
+          echo "No tracked credential files."
+
+      - name: Fail on private keys in the working tree
+        run: |
+          # Built from parts so this workflow file does not match its own pattern.
+          PATTERN="-----BEGIN .*PRIVATE"" KEY-----"
+          if grep -rIl --exclude-dir=.git -- "$PATTERN" . ; then
+            echo "A private key is present in the working tree."
+            exit 1
+          fi
+          echo "No private keys found."
