@@ -157,5 +157,85 @@ class DeadCodeTests(unittest.TestCase):
         self.assertEqual(offenders, [], f"Nested __main__ guards found: {offenders}")
 
 
+
+
+class LegacyWindowDefectTests(unittest.TestCase):
+    """Guards on defects that lived in the classic (Old Style GUI) window."""
+
+    def test_no_global_declaration_for_a_closure_local(self):
+        # `global things` targeted a name that only exists as a closure local, so the
+        # classic List Coordinates delete always raised NameError. Checked via AST so a
+        # comment describing the old bug does not trip the test.
+        import ast
+
+        tree = ast.parse(read("AutoClicker.py"))
+        module_level = {
+            target.id
+            for node in tree.body if isinstance(node, ast.Assign)
+            for target in node.targets if isinstance(target, ast.Name)
+        }
+        offenders = [
+            (node.lineno, name)
+            for node in ast.walk(tree) if isinstance(node, ast.Global)
+            for name in node.names if name not in module_level
+        ]
+        self.assertEqual(offenders, [], f"`global` on names with no module-level binding: {offenders}")
+
+    def test_no_eval_or_exec_anywhere(self):
+        # Listbox rows are built from user-entered X/Y text, and eval() executed them.
+        import ast
+
+        tree = ast.parse(read("AutoClicker.py"))
+        offenders = [
+            (node.lineno, node.func.id)
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+            and node.func.id in ("eval", "exec")
+        ]
+        self.assertEqual(offenders, [], f"eval/exec calls at {offenders}")
+
+    def test_no_exit_calls_inside_worker_threads(self):
+        # `exit(0)` raises SystemExit, which on a worker thread kills only that thread
+        # with no status update, leaving the UI showing a run that has already died.
+        import ast
+
+        tree = ast.parse(read("AutoClicker.py"))
+        offenders = [
+            node.lineno
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id in ("exit", "quit")
+        ]
+        self.assertEqual(offenders, [], f"bare exit()/quit() calls at lines {offenders}")
+
+    def test_os_exit_is_not_used_for_the_emergency_hotkey(self):
+        # os._exit skips the workspace save, discarding unsaved recordings and layout.
+        source = read("AutoClicker.py")
+        self.assertNotIn('add_hotkey("ctrl+shift+k", lambda: os._exit(0))', source)
+
+
+class ValidationBoundsTests(unittest.TestCase):
+    def test_opacity_validation_matches_the_runtime_clamp(self):
+        low, high = AutoClicker.WINDOW_OPACITY_RANGE
+        inside = AutoClicker._validate_profile_data("p", {"window_opacity": str(low)})
+        self.assertEqual(inside["warnings"], [])
+        outside = AutoClicker._validate_profile_data("p", {"window_opacity": str(low - 0.2)})
+        self.assertTrue(outside["warnings"])
+
+    def test_ui_scale_validation_matches_the_runtime_clamp(self):
+        low, high = AutoClicker.UI_SCALE_RANGE
+        inside = AutoClicker._validate_profile_data("p", {"ui_scale": str(high)})
+        self.assertEqual(inside["warnings"], [])
+        outside = AutoClicker._validate_profile_data("p", {"ui_scale": str(high + 0.5)})
+        self.assertTrue(outside["warnings"])
+
+    def test_new_action_types_pass_profile_validation(self):
+        for action in ("Scroll Down", "Key Press", "Drag To"):
+            with self.subTest(action=action):
+                result = AutoClicker._validate_profile_data("p", {"click_mode": action})
+                self.assertTrue(result["valid"], result["errors"])
+
+
 if __name__ == "__main__":
     unittest.main()

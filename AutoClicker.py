@@ -143,6 +143,10 @@ PROFILE_ENUM_FIELDS = {
     "theme": {"Light", "Dark", "Ocean", "Midnight", "System"},
     "pacing_mode": {"Precise", "Legacy V10.1"},
 }
+# The validator used to warn outside 0.2-1.0 / 0.5-2.0 while the runtime clamped to these
+# tighter bounds, so a "valid" profile could still be silently changed on load.
+WINDOW_OPACITY_RANGE = (0.70, 1.00)
+UI_SCALE_RANGE = (0.90, 1.35)
 SAFETY_PRESETS = {
     "Simulation": {
         "dry_run": True,
@@ -1226,10 +1230,16 @@ def _validate_profile_data(profile_name, profile_data, click_types=None):
             "micro_pause_duration",
         } and value < 0:
             result["errors"].append(f"{field_name} must be zero or greater")
-        if field_name == "window_opacity" and not 0.2 <= value <= 1.0:
-            result["warnings"].append("window_opacity is outside the normal 0.2-1.0 range")
-        if field_name == "ui_scale" and not 0.5 <= value <= 2.0:
-            result["warnings"].append("ui_scale is outside the normal 0.5-2.0 range")
+        if field_name == "window_opacity" and not WINDOW_OPACITY_RANGE[0] <= value <= WINDOW_OPACITY_RANGE[1]:
+            result["warnings"].append(
+                f"window_opacity is outside the supported {WINDOW_OPACITY_RANGE[0]:.2f}-"
+                f"{WINDOW_OPACITY_RANGE[1]:.2f} range and will be clamped on load"
+            )
+        if field_name == "ui_scale" and not UI_SCALE_RANGE[0] <= value <= UI_SCALE_RANGE[1]:
+            result["warnings"].append(
+                f"ui_scale is outside the supported {UI_SCALE_RANGE[0]:.2f}-"
+                f"{UI_SCALE_RANGE[1]:.2f} range and will be clamped on load"
+            )
 
     for field_name in PROFILE_BOOL_FIELDS & set(profile_data):
         if not isinstance(profile_data[field_name], bool):
@@ -1400,6 +1410,9 @@ def Photo_Clicker():
 
     if not _ensure_dependencies("Photo Clicker", ["pyautogui", "keyboard"]):
         return
+    # Pillow drives the thumbnail preview; without it the window opens with a dead panel.
+    if "Pillow" in IMPORT_ERRORS:
+        _show_dependency_error("Photo Clicker preview", ["Pillow"])
 
     _BG = "#edf0f7"
     _CARD_BG = "#f8fafc"
@@ -1687,6 +1700,15 @@ def Photo_Clicker():
                 except Exception as exc:
                     if exc.__class__.__name__ == "ImageNotFoundException":
                         location = None
+                    elif "confidence" in str(exc).lower() and "opencv" in str(exc).lower():
+                        # PyAutoGUI needs OpenCV for confidence matching. Say so plainly
+                        # instead of leaking its internal message, and stop the scan
+                        # rather than repeating an error that cannot resolve itself.
+                        set_status(
+                            "Confidence matching needs OpenCV. Install it with: "
+                            "pip install opencv-python"
+                        )
+                        break
                     else:
                         set_status(f"Scan error: {exc}")
                         location = None
@@ -2105,7 +2127,13 @@ def Colour_Clicker():
                     stop_btn.configure(state=DISABLED)
         except queue.Empty:
             pass
-        master.after(100, pump_ui_queue)
+        except Exception:
+            pass
+        try:
+            if master.winfo_exists():
+                master.after(100, pump_ui_queue)
+        except Exception:
+            pass
 
     def is_valid_hex_colour(value):
         value = value.strip()
@@ -2592,9 +2620,11 @@ def Colour_Clicker():
         master.mainloop()
 
 def Locate_Click():
-    """Wrapper for the advanced Photo Clicker tool."""
-    if not _ensure_dependencies("Locate and Click", ["pyautogui", "keyboard"]):
-        return
+    """Alias for the Photo Clicker tool, kept for the existing menu entry.
+
+    It used to run its own dependency check before calling Photo_Clicker, which runs the
+    same check, so a missing package produced two identical error dialogs.
+    """
     Photo_Clicker()
 
 
@@ -2893,15 +2923,24 @@ left click the list""", anchor=E).place(x=350, y=220)
             
 
 
-                def delete(listbox):
-                    global things
-                    # Delete from Listbox
+                def delete(listbox=None):
+                    """Remove the selected coordinate from both the listbox and the model.
+
+                    This used to declare `global things` even though `things` is a closure
+                    local, so it always raised NameError: the row vanished from the listbox
+                    while Run List kept clicking the deleted coordinate. It also read the
+                    row *after* deleting it (so it saw the wrong one) and passed that text
+                    through eval(), which executes whatever the X/Y fields contain.
+                    """
                     selection = list_box.curselection()
-                    list_box.delete(selection[0])
-                    # Delete from list that provided it
-                    value = eval(list_box.get(selection[0]))
-                    ind = things.index(value)
-                    del (things[ind])
+                    if not selection:
+                        return
+                    index = selection[0]
+                    if 0 <= index < len(things):
+                        del things[index]
+                    list_box.delete(0, END)
+                    for entry in things:
+                        list_box.insert(END, entry)
 
                 popup = Menu(root, tearoff=0)
                 popup.add_command(label='Run list', command=run_list)
@@ -3065,6 +3104,29 @@ left click the list""", anchor=E).place(x=350, y=220)
             x1 = threading.Thread(target=self.do_conversion, daemon=True)
             x1.start() 
         def do_conversion(self):
+            """Wrapper that always restores the PyAutoGUI corner fail-safe.
+
+            The branches below set FAILSAFE = False and never put it back, which left the
+            corner escape hatch disabled for every window opened afterwards.
+            """
+            previous_failsafe = getattr(pyautogui, "FAILSAFE", True)
+            try:
+                self._run_classic_clicks()
+            except Exception as exc:
+                # Report on the Tk thread; a worker-thread traceback would otherwise be
+                # invisible in a windowed build.
+                message = str(exc)
+                try:
+                    self.after(0, lambda: messagebox.showerror("AutoClicker", f"Run stopped: {message}"))
+                except Exception:
+                    pass
+            finally:
+                try:
+                    pyautogui.FAILSAFE = previous_failsafe
+                except Exception:
+                    pass
+
+        def _run_classic_clicks(self):
             if self.cmb.get() == "Left Click":
                 y = self.inputY.get()
                 x = self.inputX.get()
@@ -3077,8 +3139,7 @@ left click the list""", anchor=E).place(x=350, y=220)
                 except:
                     
                     messagebox.showerror('Invalid point', 'Invalid point')
-                    YourGUI.destroy(self)
-                    # strtoint("crashmE!")
+                    return
                 while running:
                     pyautogui.FAILSAFE = False # disables the fail-safe
                     pyautogui.click(x, y)
@@ -3087,7 +3148,7 @@ left click the list""", anchor=E).place(x=350, y=220)
                     start_time = datetime.datetime.now()
                     while (datetime.datetime.now() - start_time).total_seconds() < num:
                         if keyboard.is_pressed(self.inputhotkey.get()):
-                            exit(0)
+                            return
                         else:
                             pass
                     
@@ -3105,8 +3166,7 @@ left click the list""", anchor=E).place(x=350, y=220)
                 except:
 
                     messagebox.showerror('Invalid point', 'Invalid point')
-                    YourGUI.destroy(self)
-                    # strtoint("crashmE!")
+                    return
                         
                 while running:
                     pyautogui.FAILSAFE = False # disables the fail-safe
@@ -3122,7 +3182,7 @@ left click the list""", anchor=E).place(x=350, y=220)
                     while (datetime.datetime.now() - start_time).total_seconds() < num:
                         
                         if keyboard.is_pressed(self.inputhotkey.get()):
-                            exit(0)
+                            return
                         else:
                             pass
             elif self.cmb.get() == "Middle Click":
@@ -3148,7 +3208,7 @@ left click the list""", anchor=E).place(x=350, y=220)
                     start_time = datetime.datetime.now()
                     while (datetime.datetime.now() - start_time).total_seconds() < num:
                         if keyboard.is_pressed(self.inputhotkey.get()):
-                            exit(0)
+                            return
                     else:
                         pass
                     
@@ -3179,7 +3239,7 @@ left click the list""", anchor=E).place(x=350, y=220)
                     start_time = datetime.datetime.now()
                     while (datetime.datetime.now() - start_time).total_seconds() < num:
                         if keyboard.is_pressed(self.inputhotkey.get()):
-                            exit(0)
+                            return
                     else:
                         pass
                     
@@ -3210,7 +3270,7 @@ left click the list""", anchor=E).place(x=350, y=220)
                     start_time = datetime.datetime.now()
                     while (datetime.datetime.now() - start_time).total_seconds() < num:
                         if keyboard.is_pressed(self.inputhotkey.get()):
-                            exit(0)
+                            return
                     else:
                         pass
                     
@@ -3241,7 +3301,7 @@ left click the list""", anchor=E).place(x=350, y=220)
                     start_time = datetime.datetime.now()
                     while (datetime.datetime.now() - start_time).total_seconds() < num:
                         if keyboard.is_pressed(self.inputhotkey.get()):
-                            exit(0)
+                            return
                     else:
                         pass
                     
@@ -3323,6 +3383,7 @@ def MAINWINDOW_REDESIGNED():
             self.global_hotkey_handles = {}
             self.lifetime_stats = {"runs": 0, "actions": 0, "seconds": 0.0}
             self._theme_roles = {}
+            self.profile_undo_stack = []
 
             self.target_x_var = tk.StringVar(value="0")
             self.target_y_var = tk.StringVar(value="0")
@@ -4364,6 +4425,11 @@ def MAINWINDOW_REDESIGNED():
             ttk.Button(profiles_body, text="Delete Profile", style="Secondary.TButton", command=self._delete_selected_profile).grid(row=5, column=0, columnspan=2, sticky="ew", pady=(8, 0))
             ttk.Button(profiles_body, text="Export Profiles", style="Secondary.TButton", command=self._export_profiles).grid(row=6, column=0, sticky="ew", pady=(8, 0))
             ttk.Button(profiles_body, text="Import Profiles", style="Secondary.TButton", command=self._import_profiles).grid(row=6, column=1, sticky="ew", padx=(8, 0), pady=(8, 0))
+            self.profile_undo_button = ttk.Button(
+                profiles_body, text="Undo Profile Change", style="Secondary.TButton",
+                command=self._undo_profile_change, state=DISABLED,
+            )
+            self.profile_undo_button.grid(row=7, column=0, columnspan=2, sticky="ew", pady=(8, 0))
 
             window_card, window_body = self._create_dropdown_section(
                 left_stack,
@@ -4466,9 +4532,26 @@ def MAINWINDOW_REDESIGNED():
             ttk.Button(controls_body, text="Old Style GUI", style="Secondary.TButton", command=self._open_old_window).grid(row=1, column=0, sticky="ew", pady=(0, 8))
             ttk.Button(controls_body, text="Recording Studio", style="Secondary.TButton", command=self._open_recording_studio).grid(row=2, column=0, sticky="ew", pady=(0, 8))
             tk.Label(controls_body, text="Recent activity", bg="#f8fafc", fg="#0f172a", font=("Segoe UI", 10, "bold")).grid(row=3, column=0, sticky="w", pady=(4, 6))
-            self.activity_list = Listbox(controls_body, height=10, font=("Segoe UI", 9), bg="white", fg="#0f172a", selectbackground="#1d4ed8", activestyle="none", exportselection=False)
-            self.activity_list.grid(row=4, column=0, sticky="nsew", pady=(0, 8))
-            ttk.Button(controls_body, text="Exit", style="Secondary.TButton", command=self.EXITME).grid(row=5, column=0, sticky="ew")
+            # The feed kept 80 entries but only ever showed the last 12, with no scrollbar.
+            activity_frame = tk.Frame(controls_body, bg="#f8fafc")
+            activity_frame.grid(row=4, column=0, sticky="nsew", pady=(0, 8))
+            activity_frame.columnconfigure(0, weight=1)
+            activity_frame.rowconfigure(0, weight=1)
+            self.activity_list = Listbox(activity_frame, height=10, font=("Segoe UI", 9), bg="white", fg="#0f172a", selectbackground="#1d4ed8", activestyle="none", exportselection=False)
+            self.activity_list.grid(row=0, column=0, sticky="nsew")
+            activity_scroll = ttk.Scrollbar(activity_frame, orient="vertical", command=self.activity_list.yview)
+            activity_scroll.grid(row=0, column=1, sticky="ns")
+            self.activity_list.configure(yscrollcommand=activity_scroll.set)
+            self.activity_list.bind("<Control-c>", self._copy_activity_selection)
+            self.activity_list.bind("<Double-Button-1>", self._copy_activity_selection)
+
+            activity_actions = tk.Frame(controls_body, bg="#f8fafc")
+            activity_actions.grid(row=5, column=0, sticky="ew", pady=(0, 8))
+            activity_actions.columnconfigure(0, weight=1)
+            activity_actions.columnconfigure(1, weight=1)
+            ttk.Button(activity_actions, text="Copy Log", style="Secondary.TButton", command=self._copy_activity_log).grid(row=0, column=0, sticky="ew")
+            ttk.Button(activity_actions, text="Export Log", style="Secondary.TButton", command=self._export_activity_log).grid(row=0, column=1, sticky="ew", padx=(8, 0))
+            ttk.Button(controls_body, text="Exit", style="Secondary.TButton", command=self.EXITME).grid(row=6, column=0, sticky="ew")
 
             footer = tk.Frame(shell, bg="#dbe7f2")
             footer.grid(row=3, column=0, sticky="ew", pady=(16, 0))
@@ -4650,14 +4733,14 @@ def MAINWINDOW_REDESIGNED():
                 opacity = float(self.window_opacity_var.get())
             except Exception:
                 opacity = 1.0
-            return max(0.70, min(1.00, opacity))
+            return max(WINDOW_OPACITY_RANGE[0], min(WINDOW_OPACITY_RANGE[1], opacity))
 
         def _normalize_ui_scale(self):
             try:
                 scale = float(self.ui_scale_var.get())
             except Exception:
                 scale = 1.0
-            return max(0.90, min(1.35, scale))
+            return max(UI_SCALE_RANGE[0], min(UI_SCALE_RANGE[1], scale))
 
         def _refresh_window_summary(self):
             close_action = "tray" if self.close_to_tray_var.get() else "exit"
@@ -4921,9 +5004,34 @@ def MAINWINDOW_REDESIGNED():
             self.activity_history = self.activity_history[-80:]
             if hasattr(self, "activity_list") and self.activity_list.winfo_exists():
                 self.activity_list.delete(0, END)
-                for log_entry in self.activity_history[-12:]:
+                # Show the whole retained history; the scrollbar makes it reachable.
+                for log_entry in self.activity_history:
                     self.activity_list.insert(END, log_entry)
                 self.activity_list.yview_moveto(1.0)
+
+        def _copy_activity_selection(self, _event=None):
+            selection = self.activity_list.curselection()
+            if not selection:
+                return
+            self._copy_to_clipboard(self.activity_list.get(selection[0]), "Activity entry copied.")
+
+        def _copy_activity_log(self):
+            if not self.activity_history:
+                self.status_var.set("No activity to copy yet.")
+                return
+            self._copy_to_clipboard(
+                "\n".join(self.activity_history),
+                f"Copied {len(self.activity_history)} activity line(s) to the clipboard.",
+            )
+
+        def _copy_to_clipboard(self, text, message):
+            try:
+                self.clipboard_clear()
+                self.clipboard_append(text)
+                self.update_idletasks()
+                self.status_var.set(message)
+            except Exception as exc:
+                self.status_var.set(f"Clipboard unavailable: {exc}")
 
         def _serialize_workspace_state(self):
             geometry = ""
@@ -5101,17 +5209,61 @@ def MAINWINDOW_REDESIGNED():
             if not messagebox.askyesno("Delete profile", f"Delete profile '{profile_name}'?", parent=self):
                 return
 
+            removed_payload = self.saved_profiles[profile_name]
             del self.saved_profiles[profile_name]
             try:
                 self._write_profiles_to_disk()
             except Exception as exc:
+                # Put it back: the file write failed, so the in-memory set must not diverge.
+                self.saved_profiles[profile_name] = removed_payload
                 messagebox.showerror("Delete failed", f"Unable to update the profile file.\n{exc}", parent=self)
                 return
 
+            self._push_profile_undo("delete", {profile_name: removed_payload})
             self._refresh_profile_choices()
             self._refresh_profile_state()
-            self.status_var.set(f"Deleted profile '{profile_name}'.")
+            self.status_var.set(f"Deleted profile '{profile_name}'. Use Undo Profile Change to restore it.")
             self._append_activity(f"Deleted profile '{profile_name}'.")
+            self._schedule_workspace_save()
+
+        def _push_profile_undo(self, label, removed_profiles):
+            """Remember the profiles a destructive action removed or overwrote."""
+            self.profile_undo_stack.append({
+                "label": label,
+                "profiles": {name: dict(payload) for name, payload in removed_profiles.items()},
+                "at": datetime.datetime.now().isoformat(timespec="seconds"),
+            })
+            self.profile_undo_stack = self.profile_undo_stack[-10:]
+            if hasattr(self, "profile_undo_button"):
+                self.profile_undo_button.configure(state=NORMAL)
+
+        def _undo_profile_change(self):
+            """Restore the profiles removed or overwritten by the last destructive action."""
+            if not self.profile_undo_stack:
+                self.status_var.set("Nothing to undo.")
+                return
+            entry = self.profile_undo_stack.pop()
+            restored = list(entry["profiles"])
+            previous = {name: self.saved_profiles.get(name) for name in restored}
+            self.saved_profiles.update(entry["profiles"])
+            try:
+                self._write_profiles_to_disk()
+            except Exception as exc:
+                for name, payload in previous.items():
+                    if payload is None:
+                        self.saved_profiles.pop(name, None)
+                    else:
+                        self.saved_profiles[name] = payload
+                self.profile_undo_stack.append(entry)
+                messagebox.showerror("Undo failed", f"Unable to update the profile file.\n{exc}", parent=self)
+                return
+
+            if hasattr(self, "profile_undo_button") and not self.profile_undo_stack:
+                self.profile_undo_button.configure(state=DISABLED)
+            self._refresh_profile_choices()
+            self._refresh_profile_state()
+            self.status_var.set(f"Restored {len(restored)} profile(s) from the last {entry['label']}.")
+            self._append_activity(f"Undid profile {entry['label']}: restored {', '.join(sorted(restored))}.")
             self._schedule_workspace_save()
 
         def _export_profiles(self):
@@ -5196,6 +5348,12 @@ def MAINWINDOW_REDESIGNED():
                     self.status_var.set("Profile import cancelled after preview.")
                     return
 
+            # Snapshot anything about to be overwritten so the import is reversible.
+            overwritten = {
+                name: dict(self.saved_profiles[name])
+                for name in preview["valid_profiles"]
+                if name in self.saved_profiles
+            }
             self.saved_profiles.update(preview["valid_profiles"])
 
             try:
@@ -5204,9 +5362,12 @@ def MAINWINDOW_REDESIGNED():
                 messagebox.showerror("Import failed", f"Unable to update the local profile file.\n{exc}", parent=self)
                 return
 
+            if overwritten:
+                self._push_profile_undo("import overwrite", overwritten)
             self._refresh_profile_choices()
             self._refresh_profile_state()
-            self.status_var.set(f"Imported {preview['valid_count']} profile(s).")
+            overwrite_note = f" ({len(overwritten)} overwritten, undoable)" if overwritten else ""
+            self.status_var.set(f"Imported {preview['valid_count']} profile(s){overwrite_note}.")
             self._append_activity(
                 f"Imported {preview['valid_count']} profile(s) from {os.path.basename(import_path)}."
             )
@@ -6442,15 +6603,31 @@ def MAINWINDOW_REDESIGNED():
                 self._schedule_workspace_save()
 
         def _record_point(self):
-            if self.is_recording:
+            """Capture a point. Runs on the `keyboard` hook thread, not the Tk thread."""
+            if not self.is_recording:
+                return
+            try:
+                x_pos, y_pos = pyautogui.position()
+            except Exception:
+                return
+            # The Tk thread rebinds self.recording_data wholesale (load, clear, shift), so
+            # appending from this thread could write into a list that is no longer the
+            # live one. Marshalling the mutation to the Tk thread removes the race.
+            try:
+                self.after(0, self._append_recorded_point, int(x_pos), int(y_pos))
+            except Exception:
+                return
+            if winsound:
                 try:
-                    x, y = pyautogui.position()
-                    self.recording_data.append((x, y))
-                    self._set_status_safe(f"Captured ({x}, {y}). Total: {len(self.recording_data)}")
-                    if winsound:
-                        winsound.Beep(800, 50)
-                except:
+                    winsound.Beep(800, 50)
+                except Exception:
                     pass
+
+        def _append_recorded_point(self, x_pos, y_pos):
+            if not self.is_recording:
+                return
+            self.recording_data.append((x_pos, y_pos))
+            self.status_var.set(f"Captured ({x_pos}, {y_pos}). Total: {len(self.recording_data)}")
 
         def _play_recording(self):
             if not self.recording_data:
