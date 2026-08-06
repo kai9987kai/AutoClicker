@@ -38,6 +38,49 @@ def make_fake_pyautogui(calls):
     )
 
 
+def make_fake_keyboard():
+    """Minimal stand-in for the `keyboard` package."""
+    return types.SimpleNamespace(
+        is_pressed=lambda key: False,
+        add_hotkey=lambda *a, **k: object(),
+        remove_hotkey=lambda handle: None,
+        parse_hotkey=lambda hotkey: hotkey,
+    )
+
+
+def silence_dialogs():
+    """Replace every blocking dialog with a no-op and return an undo callable.
+
+    A modal `messagebox.showerror` has nobody to dismiss it on a CI runner: the job
+    hangs until the platform's timeout. No test may be able to open one.
+    """
+    import tkinter.messagebox as messagebox
+
+    names = ("showerror", "showinfo", "showwarning", "askyesno", "askyesnocancel", "askokcancel")
+    saved = {name: getattr(messagebox, name, None) for name in names}
+    replacements = {
+        "showerror": lambda *a, **k: None,
+        "showinfo": lambda *a, **k: None,
+        "showwarning": lambda *a, **k: None,
+        "askyesno": lambda *a, **k: True,
+        "askyesnocancel": lambda *a, **k: True,
+        "askokcancel": lambda *a, **k: True,
+    }
+    for name, replacement in replacements.items():
+        setattr(messagebox, name, replacement)
+        # AutoClicker did `from tkinter import messagebox`, so it shares this module object,
+        # but rebind explicitly in case that ever changes.
+        setattr(AutoClicker.messagebox, name, replacement)
+
+    def restore():
+        for name, original in saved.items():
+            if original is not None:
+                setattr(messagebox, name, original)
+                setattr(AutoClicker.messagebox, name, original)
+
+    return restore
+
+
 _SHARED = {}
 
 
@@ -57,12 +100,31 @@ def get_shared_gui():
     _SHARED["calls"] = calls
     _SHARED["fake"] = make_fake_pyautogui(calls)
     _SHARED["real_pyautogui"] = AutoClicker.pyautogui
+    _SHARED["real_keyboard"] = AutoClicker.keyboard
     AutoClicker.pyautogui = _SHARED["fake"]
+    AutoClicker.keyboard = make_fake_keyboard()
+
+    # We are supplying working stand-ins, so the dependency gate must not fire. Without
+    # this, CI (which installs no third-party packages by design) reaches
+    # _show_dependency_error and opens a modal dialog that never closes.
+    _SHARED["import_errors"] = dict(AutoClicker.IMPORT_ERRORS)
+    for package in ("pyautogui", "keyboard"):
+        AutoClicker.IMPORT_ERRORS.pop(package, None)
+    _SHARED["restore_dialogs"] = silence_dialogs()
 
     temp = tempfile.TemporaryDirectory()
     _SHARED["temp"] = temp
     _SHARED["env"] = {key: os.environ.get(key) for key in ("APPDATA", "LOCALAPPDATA")}
     os.environ["APPDATA"] = os.environ["LOCALAPPDATA"] = temp.name
+
+    def give_up(reason):
+        AutoClicker.pyautogui = _SHARED["real_pyautogui"]
+        AutoClicker.keyboard = _SHARED["real_keyboard"]
+        AutoClicker.IMPORT_ERRORS.clear()
+        AutoClicker.IMPORT_ERRORS.update(_SHARED["import_errors"])
+        _SHARED["restore_dialogs"]()
+        _SHARED["unavailable"] = reason
+        raise unittest.SkipTest(reason)
 
     holder = {}
     real_mainloop = tk.Tk.mainloop
@@ -70,15 +132,12 @@ def get_shared_gui():
     try:
         AutoClicker.MAINWINDOW_REDESIGNED()
     except Exception as exc:
-        _SHARED["unavailable"] = f"no usable display: {exc}"
-        AutoClicker.pyautogui = _SHARED["real_pyautogui"]
-        raise unittest.SkipTest(_SHARED["unavailable"])
+        give_up(f"no usable display: {exc}")
     finally:
         tk.Tk.mainloop = real_mainloop
 
     if holder.get("gui") is None:
-        _SHARED["unavailable"] = "Control Center did not build"
-        raise unittest.SkipTest(_SHARED["unavailable"])
+        give_up("Control Center did not build")
 
     _SHARED["gui"] = holder["gui"]
     return _SHARED["gui"]

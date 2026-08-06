@@ -10,6 +10,9 @@ jobs:
   test:
     name: tests (${{ matrix.os }}, py${{ matrix.python-version }})
     runs-on: ${{ matrix.os }}
+    # Backstop: a GUI test that manages to open a modal dialog would otherwise hang until
+    # GitHub's 6-hour limit. The suite finishes in about a minute.
+    timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
@@ -55,6 +58,7 @@ jobs:
   secrets:
     name: secret scan
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
         with:
