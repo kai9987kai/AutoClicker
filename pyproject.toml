@@ -1,0 +1,15 @@
+[tool.pytest.ini_options]
+# Without pythonpath the tests cannot `import AutoClicker`, and without testpaths a bare
+# `pytest` collects nothing. Both used to fail silently.
+testpaths = ["tests"]
+pythonpath = ["."]
+addopts = "-ra"
+
+[tool.ruff]
+line-length = 140
+target-version = "py310"
+
+[tool.ruff.lint]
+# The app is a single Tkinter file that leans on `from tkinter import *`; the star-import
+# and bare-except rules are informational here rather than enforced.
+ignore = ["E402", "E722", "F403", "F405"]

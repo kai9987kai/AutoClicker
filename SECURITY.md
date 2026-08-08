@@ -8,18 +8,18 @@ We provide security updates for the following versions:
 
 | Version | Supported |
 | ------- | --------- |
-| 5.1.x   | ✅        |
-| 5.0.x   | ❌        |
-| 4.0.x   | ✅        |
-| < 4.0   | ❌        |
+| V11.0   | ✅        |
+| V10.1   | ✅        |
+| V10.0   | ❌        |
+| < V10   | ❌        |
 
 Only the versions marked as supported will receive security fixes.
 
 ## Reporting a Vulnerability
 
-Please report security vulnerabilities by emailing:
-
-**[SECURITY_CONTACT_EMAIL]**
+Please report security vulnerabilities privately through
+[GitHub Security Advisories](https://github.com/kai9987kai/AutoClicker/security/advisories/new)
+on this repository. That keeps the report private until a fix is available.
 
 Include as much detail as possible, such as:
 
@@ -35,9 +35,9 @@ We ask that you do not publicly disclose the vulnerability until we have had a r
 
 After receiving a report, we will:
 
-- Acknowledge receipt within **[X business days]**
+- Acknowledge receipt within **5 business days**
 - Review and validate the issue
-- Provide a status update within **[Y business days]**
+- Provide a status update within **10 business days**
 - Fix confirmed vulnerabilities in a future release or issue a mitigation if needed
 
 If the report is accepted, we will work to remediate it as quickly as reasonably possible based on severity and impact.
@@ -54,7 +54,14 @@ We appreciate responsible disclosure practices and ask that reporters:
 
 ## Scope
 
-This policy applies to security issues in the main project codebase and officially supported releases.  
+This policy applies to security issues in the main project codebase and officially supported releases.
+
+This project automates mouse and keyboard input on the local machine. Reports about it
+*being able* to send input are out of scope — that is the entire purpose of the tool.
+In-scope examples include: code execution from a crafted profile, recording or sequence
+file; secrets written to disk or into a support bundle; and a run that cannot be stopped
+by the documented stop controls.
+
 Issues in unsupported versions may be reviewed on a best-effort basis, but security fixes are not guaranteed.
 
 ## Recognition

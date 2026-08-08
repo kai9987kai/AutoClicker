@@ -37,7 +37,7 @@ class HelperTests(unittest.TestCase):
                 report = AutoClicker._build_headless_health_report()
 
             self.assertIn("AutoClicker Health Check", report)
-            self.assertIn("App version: V10.1", report)
+            self.assertIn(f"App version: {AutoClicker.APP_VERSION}", report)
             self.assertIn("Dependencies", report)
             self.assertIn("State Files", report)
 
@@ -46,7 +46,7 @@ class HelperTests(unittest.TestCase):
             with mock.patch.dict(os.environ, {"APPDATA": temp_dir}, clear=False):
                 data = AutoClicker._collect_headless_health_data()
 
-            self.assertEqual(data["app_version"], "V10.1")
+            self.assertEqual(data["app_version"], AutoClicker.APP_VERSION)
             self.assertIn("dependencies", data)
             self.assertIn("profiles", data["state_files"])
             self.assertEqual(
@@ -67,7 +67,7 @@ class HelperTests(unittest.TestCase):
             {"workspace": "workspace.json"},
         )
 
-        self.assertEqual(payload["app_version"], "V10.1")
+        self.assertEqual(payload["app_version"], AutoClicker.APP_VERSION)
         self.assertEqual(payload["profile_data"], profile_data)
         self.assertEqual(len(payload["activity_history"]), 80)
         self.assertEqual(payload["activity_history"][0], "activity 20")
